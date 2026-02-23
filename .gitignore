@@ -137,7 +137,20 @@ cython_debug/
 # VS Code
 .vscode/
 
+# Cursor
+.cursor/
+
+# Node
+node_modules/
+
 # Project specific
 logs/
+screenshots/
+desktop/release/
+**/logs/
 chat_history/
 akira_history.json
+backend/akira_history.json
+akira_memory.json
+backend/akira_memory.json
+backend/theme_config.json

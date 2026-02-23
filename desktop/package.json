@@ -1,0 +1,51 @@
+{
+  "name": "akira-desktop",
+  "version": "1.0.0",
+  "description": "Akira desktop app — same UI as the web frontend, uses backend APIs",
+  "main": "electron-main.js",
+  "author": "Akira",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "install:insecure": "node -e \"const c=require('child_process');const e={...process.env,NODE_TLS_REJECT_UNAUTHORIZED:'0'};const r=c.spawnSync('npm',['install'],{stdio:'inherit',env:e,shell:true});process.exit(r.status);\"",
+    "dev": "concurrently \"npm run dev:frontend\" \"wait-on http://localhost:5173 && electron . --dev\"",
+    "dev:frontend": "cd ../frontend && npm run dev",
+    "build": "npm run build:frontend && npm run build:copy && electron-builder",
+    "build:frontend": "cd ../frontend && cross-env VITE_BASE_PATH=./ npm run build",
+    "build:copy": "node -e \"const fs=require('fs'); const p=require('path'); const src=p.join(__dirname,'../frontend/dist'); const dest=p.join(__dirname,'dist'); fs.rmSync(dest,{recursive:true,force:true}); fs.cpSync(src,dest,{recursive:true});\"",
+    "build:dir": "npm run build:frontend && npm run build:copy && electron-builder --dir",
+    "pack": "npm run build:frontend && npm run build:copy && electron-builder --dir"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "concurrently": "^9.0.1",
+    "cross-env": "^7.0.3",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.akira.desktop",
+    "productName": "Akira",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron-main.js",
+      "preload.js",
+      "dist/**/*"
+    ],
+    "extraResources": [],
+    "win": {
+      "target": ["nsis", "portable"],
+      "icon": "../frontend/public/vite.svg"
+    },
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"]
+    }
+  }
+}

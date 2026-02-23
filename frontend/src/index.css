@@ -1,0 +1,80 @@
+/* Visual system: 8px base, one font, clear hierarchy (reference UI) */
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 16px;
+  --space-4: 24px;
+  --space-5: 32px;
+  --space-6: 48px;
+  --font-sans: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  --font-size-meta: 0.875rem;
+  --font-size-body: 1rem;
+  --font-size-title: 1.5rem;
+  --line-height-body: 1.5;
+  --line-height-heading: 1.2;
+  --line-height-assistant: 1.35;
+  --color-fg: #0F0E0E;
+  --color-fg-muted: #5c5a5a;
+  --color-bg: #EAE1DF;
+  --color-bg-main: #e0d6d2;
+  --color-bg-sidebar: #d8cdc9;
+  --color-border: #d0c4c0;
+  --color-bubble-user: #fff;
+  --color-highlight: #E0FF4F;
+  --color-secondary: #048BA8;
+  --color-send-btn: #BA274A;
+  --color-send-btn-hover: #9e1f3e;
+  --color-primary: #BA274A;
+  --color-primary-hover: #9e1f3e;
+  --color-error: #b91c1c;
+  --color-error-bg: #fef2f2;
+  --focus-ring: 2px solid var(--color-primary);
+  --radius: 8px;
+  --radius-lg: 12px;
+  /* Transitions: 150ms micro, 200–220ms standard, 250ms layout/panels */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --transition-fast: 0.15s var(--ease-out);
+  --transition-normal: 0.22s var(--ease-out);
+  --transition-smooth: 0.25s var(--ease-out);
+  /* Box shadows: subtle → card → elevated → modal */
+  --shadow-subtle: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-elevated: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.12), 0 4px 8px rgba(0, 0, 0, 0.06);
+  --shadow-modal: 0 24px 48px rgba(0, 0, 0, 0.18), 0 12px 24px rgba(0, 0, 0, 0.08);
+  /* Glass / frosted transparency (input bar, scroll indicator, etc.) — change once to adjust everywhere */
+  --glass-bg: 70%;
+  --glass-border: 55%;
+  --glass-blur: 14px;
+}
+
+/* Theme is controlled by theme config (see frontend/src/config/theme.js). Use set_theme tool or presets. */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  color: var(--color-fg);
+  background-color: var(--color-bg);
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+button:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}

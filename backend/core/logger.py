@@ -2,12 +2,15 @@ import logging
 import logging.handlers
 import os
 
+# Logs live under backend/
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOG_DIR = os.path.join(_BACKEND_DIR, "logs")
+
 
 def setup_logging():
     """Configure application-wide logging"""
-    # Create logs directory if it doesn't exist
-    log_dir = "logs"
-    os.makedirs(log_dir, exist_ok=True)
+    # Create logs directory if it doesn't exist (backend/logs)
+    os.makedirs(LOG_DIR, exist_ok=True)
 
     # Set up root logger
     logger = logging.getLogger()
@@ -29,7 +32,7 @@ def setup_logging():
 
     # File handler with rotation
     file_handler = logging.handlers.RotatingFileHandler(
-        os.path.join(log_dir, "akira.log"),
+        os.path.join(LOG_DIR, "akira.log"),
         maxBytes=10 * 1024 * 1024,  # 10MB
         backupCount=5,
         encoding="utf-8",

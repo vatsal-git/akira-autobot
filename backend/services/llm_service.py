@@ -4,7 +4,7 @@ import uuid
 import logging
 import base64
 from datetime import datetime
-from .llm_providers import BaseLLMProvider, AnthropicProvider
+from .llm_providers import BaseLLMProvider, AnthropicProvider, OpenRouterProvider
 from .llm_tools import LLM_Tools
 from .task_manager import TaskManager
 from backend.core.history_store import history_lock, load_history as load_history_file, save_history_atomic
@@ -25,6 +25,20 @@ SELF-IMPROVEMENT: You have read_file and write_file for code; get_system_prompt 
 Remember: Your value is honesty, directness, and blending technical knowledge with practical wisdom."""
 
 
+def _last_message_is_tool_result(messages: list) -> bool:
+    """True if the last message is a user message containing a tool_result (so we're in a tool round)."""
+    if not messages:
+        return False
+    last = messages[-1]
+    if last.get("role") != "user":
+        return False
+    content = last.get("content")
+    if not isinstance(content, list) or not content:
+        return False
+    first = content[0] if isinstance(content[0], dict) else None
+    return first is not None and first.get("type") == "tool_result"
+
+
 def _load_system_prompt_from_file(path: str) -> str | None:
     """Load system prompt from a file. Returns None if file missing or unreadable."""
     try:
@@ -41,7 +55,7 @@ class LLM_Service(LLM_Tools):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.info("Initializing LLM_Service")
         self.history_file_path = HISTORY_FILE
-        self._set_provider(provider_name or "anthropic")
+        self._set_provider(provider_name or "openrouter")
         self.system_prompt = _load_system_prompt_from_file(SYSTEM_PROMPT_FILE) or _DEFAULT_SYSTEM_PROMPT
         self.current_mood = None  # Optional; can be set by frontend (settings.mood) or by a tool
 
@@ -62,18 +76,36 @@ class LLM_Service(LLM_Tools):
             self.logger.error("Error writing system prompt: %s", e, exc_info=True)
             return 500, {"success": False, "error": str(e), "path": SYSTEM_PROMPT_FILE}
 
-    def _system_prompt_for_request(self, base_prompt: str, mood_override=None) -> str:
-        """Return the system prompt to send: base + current mood line if any. Does not modify the .md file."""
+    def _system_prompt_for_request(
+        self, base_prompt: str, mood_override=None, enabled_tools_map=None
+    ) -> str:
+        """Return the system prompt to send: base + mood (if any) + authoritative tool list.
+        Injects the actual enabled tools so the model always answers capability questions consistently."""
+        parts = [base_prompt.rstrip()]
         mood = mood_override if mood_override is not None else self.current_mood
-        if not mood or not str(mood).strip():
-            return base_prompt
-        return base_prompt.rstrip() + "\n\nCurrent mood: " + str(mood).strip()
+        if mood and str(mood).strip():
+            parts.append("\n\nCurrent mood: " + str(mood).strip())
+        enabled = self.get_enabled_tools(enabled_tools_map)
+        if enabled:
+            lines = [
+                "\n\nAvailable tools for this conversation (when users ask what tools you have or what you can do, list exactly these):"
+            ]
+            for t in enabled:
+                name = t.get("name", "")
+                desc = (t.get("description") or "").strip()
+                if desc:
+                    first_line = desc.split("\n")[0].strip()
+                    lines.append(f"- {name}: {first_line}")
+                else:
+                    lines.append(f"- {name}")
+            parts.append("\n".join(lines))
+        return "".join(parts)
 
     def _set_provider(self, provider_name: str) -> BaseLLMProvider:
         """Get the appropriate LLM provider based on name"""
         providers = {
-            "anthropic": AnthropicProvider
-            # Add more providers here as needed
+            "anthropic": AnthropicProvider,
+            "openrouter": OpenRouterProvider,
         }
 
         if provider_name.lower() not in providers:
@@ -347,7 +379,7 @@ class LLM_Service(LLM_Tools):
     ):
         """Streaming version of invoke_llm that yields partial responses and handles multiple tool calls."""
         base = system_prompt or self.system_prompt
-        active_system_prompt = self._system_prompt_for_request(base, mood)
+        active_system_prompt = self._system_prompt_for_request(base, mood, enabled_tools_map)
         messages = self._build_messages(history, user_message)
         full_response = ""
         continue_after_tool = True
@@ -456,6 +488,11 @@ class LLM_Service(LLM_Tools):
                             tool_input = {}
                         if not isinstance(tool_input, dict):
                             tool_input = {}
+                        # Fallback: some providers send full tool_use in content_block with "input" already set
+                        if not tool_input and current_tool_use:
+                            block_input = current_tool_use.get("input")
+                            if isinstance(block_input, dict):
+                                tool_input = block_input
 
                         # Now we have a complete tool call
                         tool_content = {
@@ -471,6 +508,43 @@ class LLM_Service(LLM_Tools):
 
                         # Call the tool
                         status, tool_result = self.call_tool(tool_name, tool_input)
+
+                        # Unknown/invalid tool: don't add bad assistant message; add clear user error and stop loop
+                        if tool_name not in self._tool_handlers:
+                            err_content = (
+                                "Error: You must call a tool by one of these exact names: "
+                                + ", ".join(self.tools_name_list)
+                                + ". Do not call a tool without a name or with an invalid name. Please respond again."
+                            )
+                            messages.append({"role": "user", "content": err_content})
+                            yield "\n\n" + err_content
+                            full_response += "\n\n" + err_content
+                            continue_after_tool = True
+                            use_thinking_this_turn = thinking_enabled and bool(
+                                thinking_content and thinking_signature
+                            )
+                            current_tool_use = None
+                            tool_input_json = ""
+                            in_tool_section = False
+                            break
+
+                        # Consecutive tool error: last message was already a tool result; don't loop
+                        if status != 200 and _last_message_is_tool_result(messages):
+                            err_content = (
+                                "The tool call failed again. Do not call the same tool again. "
+                                "Tell the user what went wrong (e.g. invalid theme name) and suggest a valid option."
+                            )
+                            messages.append({"role": "user", "content": err_content})
+                            yield "\n\n" + err_content
+                            full_response += "\n\n" + err_content
+                            continue_after_tool = True
+                            use_thinking_this_turn = thinking_enabled and bool(
+                                thinking_content and thinking_signature
+                            )
+                            current_tool_use = None
+                            tool_input_json = ""
+                            in_tool_section = False
+                            break
 
                         # Construct assistant message content
                         assistant_content = []
@@ -567,7 +641,7 @@ class LLM_Service(LLM_Tools):
     ):
         """Async streaming version: yields partial responses and handles multiple tool calls."""
         base = system_prompt or self.system_prompt
-        active_system_prompt = self._system_prompt_for_request(base, mood)
+        active_system_prompt = self._system_prompt_for_request(base, mood, enabled_tools_map)
         messages = self._build_messages(history, user_message)
         full_response = ""
         continue_after_tool = True
@@ -659,6 +733,11 @@ class LLM_Service(LLM_Tools):
                             tool_input = {}
                         if not isinstance(tool_input, dict):
                             tool_input = {}
+                        # Fallback: some providers send full tool_use in content_block with "input" already set
+                        if not tool_input and current_tool_use:
+                            block_input = current_tool_use.get("input")
+                            if isinstance(block_input, dict):
+                                tool_input = block_input
                         tool_content = {
                             "id": current_tool_use.get("id", "unknown"),
                             "name": current_tool_use.get("name", "unknown"),
@@ -668,6 +747,44 @@ class LLM_Service(LLM_Tools):
                         tool_name = tool_content["name"]
                         tool_input = tool_content["input"]
                         status, tool_result = self.call_tool(tool_name, tool_input)
+
+                        # Unknown/invalid tool: don't add bad assistant message; add clear user error and stop loop
+                        if tool_name not in self._tool_handlers:
+                            err_content = (
+                                "Error: You must call a tool by one of these exact names: "
+                                + ", ".join(self.tools_name_list)
+                                + ". Do not call a tool without a name or with an invalid name. Please respond again."
+                            )
+                            messages.append({"role": "user", "content": err_content})
+                            yield "\n\n" + err_content
+                            full_response += "\n\n" + err_content
+                            continue_after_tool = True
+                            use_thinking_this_turn = thinking_enabled and bool(
+                                thinking_content and thinking_signature
+                            )
+                            current_tool_use = None
+                            tool_input_json = ""
+                            in_tool_section = False
+                            break
+
+                        # Consecutive tool error: last message was already a tool result; don't loop
+                        if status != 200 and _last_message_is_tool_result(messages):
+                            err_content = (
+                                "The tool call failed again. Do not call the same tool again. "
+                                "Tell the user what went wrong (e.g. invalid theme name) and suggest a valid option."
+                            )
+                            messages.append({"role": "user", "content": err_content})
+                            yield "\n\n" + err_content
+                            full_response += "\n\n" + err_content
+                            continue_after_tool = True
+                            use_thinking_this_turn = thinking_enabled and bool(
+                                thinking_content and thinking_signature
+                            )
+                            current_tool_use = None
+                            tool_input_json = ""
+                            in_tool_section = False
+                            break
+
                         assistant_content = []
                         if thinking_content and thinking_signature:
                             assistant_content.append(

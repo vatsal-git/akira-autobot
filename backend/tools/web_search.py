@@ -27,8 +27,10 @@ TOOL_DEF = {
 
 
 def call_tool(tool_input: dict, context=None):
-    query = tool_input.get("query", "")
+    query = (tool_input.get("query") or "").strip()
     results_count = tool_input.get("results_count")
+    if not query:
+        return 400, "query is required and cannot be empty. Provide a search query string."
     search_session = requests.Session()
     url = "https://www.googleapis.com/customsearch/v1"
     params = {

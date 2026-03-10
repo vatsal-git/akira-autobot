@@ -22,6 +22,7 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
   const [enabledTools, setEnabledTools] = useState(
     () => initialSettings?.enabled_tools ?? {}
   );
+  const [stream, setStream] = useState(() => initialSettings?.stream ?? true);
   const [theme, setTheme] = useState(() => getCurrentThemeName() || 'neutral');
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const appearanceRef = useRef(null);
@@ -35,6 +36,7 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
     setThinkingEnabled(initialSettings?.thinking_enabled ?? true);
     setThinkingBudget(initialSettings?.thinking_budget ?? 16000);
     setEnabledTools(initialSettings?.enabled_tools ?? {});
+    setStream(initialSettings?.stream ?? true);
     setTheme(getCurrentThemeName() || 'neutral');
     setAppearanceOpen(false);
   }, [open, initialSettings]);
@@ -74,6 +76,7 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
       thinking_enabled: thinkingEnabled,
       thinking_budget: Number(thinkingBudget),
       enabled_tools: { ...enabledTools },
+      stream: Boolean(stream),
     });
     applyTheme(theme, true);
     onClose();
@@ -127,8 +130,8 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
               <input
                 id="settings-temperature"
                 type="number"
-                min="0"
-                max="2"
+                min={initialSettings?.temperature_min ?? 0}
+                max={initialSettings?.temperature_max ?? 2}
                 step="0.1"
                 value={temperature}
                 onChange={(e) => setTemperature(e.target.value)}
@@ -136,7 +139,7 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
                 aria-describedby="settings-temperature-hint"
               />
               <span id="settings-temperature-hint" className="settings-modal__hint">
-                0–2. Lower is more focused, higher more creative.
+                {initialSettings?.temperature_min ?? 0}–{initialSettings?.temperature_max ?? 2}. Lower is more focused, higher more creative.
               </span>
             </div>
             <div className="settings-modal__field">
@@ -146,8 +149,8 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
               <input
                 id="settings-max-tokens"
                 type="number"
-                min="1"
-                max="200000"
+                min={initialSettings?.max_tokens_min ?? 1}
+                max={initialSettings?.max_tokens_max ?? 200000}
                 value={maxTokens}
                 onChange={(e) => setMaxTokens(e.target.value)}
                 className="settings-modal__input"
@@ -177,14 +180,30 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
                 <input
                   id="settings-thinking-budget"
                   type="number"
-                  min="1024"
-                  max="100000"
+                  min={initialSettings?.thinking_budget_min ?? 1024}
+                  max={initialSettings?.thinking_budget_max ?? 128000}
                   value={thinkingBudget}
                   onChange={(e) => setThinkingBudget(e.target.value)}
                   className="settings-modal__input"
                 />
               </div>
             )}
+            <div className="settings-modal__field settings-modal__field--row">
+              <input
+                id="settings-stream"
+                type="checkbox"
+                checked={stream}
+                onChange={(e) => setStream(e.target.checked)}
+                className="settings-modal__checkbox"
+                aria-describedby="settings-stream-hint"
+              />
+              <label htmlFor="settings-stream" className="settings-modal__label settings-modal__label--inline">
+                Stream responses
+              </label>
+              <span id="settings-stream-hint" className="settings-modal__hint settings-modal__hint--inline">
+                Show reply as it’s generated. Off = wait for full reply.
+              </span>
+            </div>
           </section>
 
           <section className="settings-modal__section" aria-labelledby="settings-tools-heading">
@@ -203,20 +222,35 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
                   <li key={tool.name} className="settings-modal__tool-row">
                     <div className="settings-modal__tool-info">
                       <span className="settings-modal__tool-name">{tool.name}</span>
+                    </div>
+                    <div className="settings-modal__tool-actions">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={isEnabled}
+                        aria-label={`${tool.name} ${isEnabled ? 'on' : 'off'}`}
+                        className={`settings-modal__toggle ${isEnabled ? 'settings-modal__toggle--on' : ''}`}
+                        onClick={() => handleToolToggle(tool.name, !isEnabled)}
+                      >
+                        <span className="settings-modal__toggle-thumb" />
+                      </button>
                       {tool.description && (
-                        <span className="settings-modal__tool-desc">{tool.description}</span>
+                        <button
+                          type="button"
+                          className="settings-modal__tool-info-icon"
+                          aria-label={`Details for ${tool.name}`}
+                          aria-describedby={`tooltip-${tool.name.replace(/\W+/g, '-')}`}
+                        >
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M12 16v-4M12 8h.01" />
+                          </svg>
+                          <span id={`tooltip-${tool.name.replace(/\W+/g, '-')}`} className="settings-modal__tool-tooltip" role="tooltip">
+                            {tool.description}
+                          </span>
+                        </button>
                       )}
                     </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={isEnabled}
-                      aria-label={`${tool.name} ${isEnabled ? 'on' : 'off'}`}
-                      className={`settings-modal__toggle ${isEnabled ? 'settings-modal__toggle--on' : ''}`}
-                      onClick={() => handleToolToggle(tool.name, !isEnabled)}
-                    >
-                      <span className="settings-modal__toggle-thumb" />
-                    </button>
                   </li>
                 );
               })}

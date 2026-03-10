@@ -28,6 +28,10 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
         "null",  # Electron desktop (file:// or app load)
     ],
     allow_credentials=True,
@@ -51,21 +55,28 @@ app.include_router(task.router, prefix="/api")
 
 @app.get("/api/settings")
 def get_default_settings(request: Request):
-    """Return default settings so the frontend can initialize."""
+    """Return default settings and UI bounds (tools, model, token limits) so the frontend can initialize."""
     llm = get_llm_service(request)
     tools = [
         {"name": t["name"], "description": t["description"], "default_enabled": t.get("default_enabled", True)}
         for t in llm.tools_def
-        if t["name"] != "set_theme"
     ]
+    max_tokens_default = int(os.getenv("MAX_TOKENS", 131072))
     return {
-        "max_tokens": int(os.getenv("MAX_TOKENS", 131072)),
-        "temperature": float(os.getenv("DEFAULT_TEMPREATURE", 0.7)),
-        "current_model": os.getenv("DEFAULT_MODEL", "anthropic"),
+        "max_tokens": max_tokens_default,
+        "temperature": float(os.getenv("DEFAULT_TEMPREATURE", "0.7")),
+        "current_model": os.getenv("DEFAULT_MODEL", "openrouter"),
         "thinking_enabled": True,
         "thinking_budget": 16000,
+        "stream": True,
         "tools": tools,
-        "available_providers": ["anthropic"],
+        "available_providers": ["openrouter", "anthropic"],
+        "max_tokens_min": int(os.getenv("MAX_TOKENS_MIN", 1)),
+        "max_tokens_max": int(os.getenv("MAX_TOKENS_MAX", 200000)),
+        "temperature_min": float(os.getenv("TEMPERATURE_MIN", "0")),
+        "temperature_max": float(os.getenv("TEMPERATURE_MAX", "2")),
+        "thinking_budget_min": int(os.getenv("THINKING_BUDGET_MIN", 1024)),
+        "thinking_budget_max": int(os.getenv("THINKING_BUDGET_MAX", 128000)),
     }
 
 

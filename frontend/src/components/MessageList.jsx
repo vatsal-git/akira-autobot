@@ -199,8 +199,43 @@ function splitToolDetails(text) {
   return parts.length ? parts : [{ type: 'text', content: text }];
 }
 
-function MessageActions({ onCopy, onRegenerate, onEdit, messageIndex, justCopied, isStreaming, isAssistant }) {
+const VIEWPORT_PADDING = 8;
+
+function MessageActions({ onCopy, onRegenerate, onEdit, messageIndex, justCopied, isStreaming, isAssistant, model, isModelInfoOpen, onModelInfoMouseEnter, onModelInfoMouseLeave }) {
   const canRegenerate = onRegenerate && !isStreaming;
+  const modelLabel = model ? `Model: ${model}` : 'Model: unknown';
+  const modelInfoTriggerRef = React.useRef(null);
+  const modelInfoPopoverRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!isModelInfoOpen || !modelInfoTriggerRef.current || !modelInfoPopoverRef.current) return;
+    const trigger = modelInfoTriggerRef.current.getBoundingClientRect();
+    const popover = modelInfoPopoverRef.current;
+    const run = () => {
+      const rect = popover.getBoundingClientRect();
+      const padding = VIEWPORT_PADDING;
+      let top;
+      if (trigger.bottom + rect.height + 4 <= window.innerHeight - padding) {
+        top = trigger.bottom + 4;
+      } else if (trigger.top - rect.height - 4 >= padding) {
+        top = trigger.top - rect.height - 4;
+      } else {
+        top = Math.max(padding, Math.min(trigger.bottom + 4, window.innerHeight - rect.height - padding));
+      }
+      let left = trigger.left;
+      if (left + rect.width > window.innerWidth - padding) left = window.innerWidth - padding - rect.width;
+      if (left < padding) left = padding;
+      popover.style.position = 'fixed';
+      popover.style.top = `${top}px`;
+      popover.style.left = `${left}px`;
+      popover.style.right = 'auto';
+      popover.style.bottom = 'auto';
+      popover.style.visibility = 'visible';
+    };
+    const id = requestAnimationFrame(run);
+    return () => cancelAnimationFrame(id);
+  }, [isModelInfoOpen]);
+
   return (
     <div className="message__actions" role="group" aria-label="Message actions">
       {onEdit && (
@@ -222,7 +257,9 @@ function MessageActions({ onCopy, onRegenerate, onEdit, messageIndex, justCopied
         onClick={() => onCopy && onCopy(messageIndex)}
       >
         {justCopied ? (
-          <span className="message__action-label">Copied</span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M20 6 9 17l-5-5" />
+          </svg>
         ) : (
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
             <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
@@ -230,6 +267,36 @@ function MessageActions({ onCopy, onRegenerate, onEdit, messageIndex, justCopied
           </svg>
         )}
       </button>
+      {isAssistant && (
+        <span
+          className="message__model-info-wrap"
+          onMouseEnter={onModelInfoMouseEnter}
+          onMouseLeave={onModelInfoMouseLeave}
+        >
+          <span
+            ref={modelInfoTriggerRef}
+            className={`message__action message__action--info ${isModelInfoOpen ? 'message__action--info-open' : ''}`}
+            aria-label={modelLabel}
+            role="img"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 16v-4M12 8h.01" />
+            </svg>
+          </span>
+          {isModelInfoOpen && (
+            <div
+              ref={modelInfoPopoverRef}
+              className="message__model-popover"
+              data-model-info-popover
+              role="tooltip"
+            >
+              <span className="message__model-popover-label">Model</span>
+              <span className="message__model-popover-value">{model || 'unknown'}</span>
+            </div>
+          )}
+        </span>
+      )}
       {isAssistant && (
         <button
           type="button"
@@ -250,6 +317,7 @@ function MessageActions({ onCopy, onRegenerate, onEdit, messageIndex, justCopied
 
 export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerateMessage, onEditMessage }) {
   const [copiedIndex, setCopiedIndex] = React.useState(null);
+  const [hoverModelInfoIndex, setHoverModelInfoIndex] = React.useState(null);
 
   const handleCopy = (i) => {
     if (onCopyMessage) {
@@ -263,21 +331,32 @@ export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerate
     <ul className="message-list" aria-label="Chat messages">
       {messages.map((msg, i) => {
         const isAssistant = msg.role === 'assistant';
+        const isError = isAssistant && msg.error;
         const isLast = i === messages.length - 1;
-        const showCursor = isAssistant && isLast && isStreaming;
-        const parsed = isAssistant ? parseAssistantContent(msg.content) : null;
-        const text = isAssistant ? (parsed.main) : getMessageText(msg.content);
-        const thinking = isAssistant ? parsed.thinking : null;
-        const thinkingStreaming = isAssistant ? parsed.thinkingStreaming : null;
-        const toolStreaming = isAssistant ? parsed.toolStreaming : null;
+        const showCursor = isAssistant && isLast && isStreaming && !isError;
+        const parsed = isAssistant && !isError ? parseAssistantContent(msg.content) : null;
+        const text = isError ? getMessageText(msg.content) : (isAssistant ? (parsed.main) : getMessageText(msg.content));
+        const thinking = isAssistant && !isError ? parsed?.thinking : null;
+        const thinkingStreaming = isAssistant && !isError ? parsed?.thinkingStreaming : null;
+        const toolStreaming = isAssistant && !isError ? parsed?.toolStreaming : null;
         return (
           <li
             key={i}
-            className={`message message--${msg.role}`}
+            className={`message message--${msg.role}${isError ? ' message--error' : ''}`}
             data-role={msg.role}
           >
             <div className="message__bubble">
               <div className="message__body">
+                {isError && (
+                  <div className="message__error" role="alert">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="8" x2="12" y2="12" />
+                      <line x1="12" y1="16" x2="12.01" y2="16" />
+                    </svg>
+                    <span>{text}</span>
+                  </div>
+                )}
                 {!isAssistant && msg.images?.length > 0 && (
                   <div className="message__images" aria-label="Attached images">
                     {msg.images.map((img, j) => {
@@ -295,8 +374,7 @@ export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerate
                     })}
                   </div>
                 )}
-                {/* Complete thinking block (collapsible) */}
-                {thinking && (
+                {!isError && thinking && (
                   <details className="message-thinking" data-thinking>
                     <summary className="message-thinking__summary">
                       {thinking.summary}
@@ -310,8 +388,7 @@ export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerate
                     </div>
                   </details>
                 )}
-                {/* Streaming thinking: show expanded block and stream body until </details> */}
-                {thinkingStreaming != null && (
+                {!isError && thinkingStreaming != null && (
                   <details className="message-thinking message-thinking--streaming" data-thinking open>
                     <summary className="message-thinking__summary">Thinking</summary>
                     <div className="message-thinking__body">
@@ -323,8 +400,7 @@ export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerate
                     </div>
                   </details>
                 )}
-                {/* Streaming tool call: show expanded block and stream body until </details> */}
-                {toolStreaming != null && (
+                {!isError && toolStreaming != null && (
                   <details className="message-tool-details message-tool-details--collapsible message-tool-details--streaming" open>
                     <summary className="message-tool-details__summary">{toolStreaming.summary}</summary>
                     <div className="message-tool-details__body">
@@ -334,7 +410,7 @@ export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerate
                     </div>
                   </details>
                 )}
-                {text && (
+                {!isError && text && (
                   <div className="message__main">
                     {splitToolDetails(text).map((part, j) => {
                       if (part.type !== 'tool') {
@@ -377,6 +453,10 @@ export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerate
                   justCopied={copiedIndex === i}
                   isStreaming={isStreaming}
                   isAssistant={isAssistant}
+                  model={msg.model}
+                  isModelInfoOpen={hoverModelInfoIndex === i}
+                  onModelInfoMouseEnter={() => setHoverModelInfoIndex(i)}
+                  onModelInfoMouseLeave={() => setHoverModelInfoIndex(null)}
                 />
               )}
             </div>

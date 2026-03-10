@@ -23,6 +23,7 @@ function loadStoredSettings() {
       thinking_enabled: data.thinking_enabled,
       thinking_budget: data.thinking_budget,
       enabled_tools: data.enabled_tools,
+      stream: data.stream,
     };
   } catch {
     return null;
@@ -37,6 +38,7 @@ function saveStoredSettings(settings) {
       thinking_enabled: settings.thinking_enabled,
       thinking_budget: settings.thinking_budget,
       enabled_tools: settings.enabled_tools,
+      stream: settings.stream,
     };
     localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(toStore));
   } catch (_) {}
@@ -51,6 +53,7 @@ const DEFAULT_SETTINGS = {
   tools: [],
   current_model: 'anthropic',
   available_providers: ['anthropic'],
+  stream: true, // When true, response streams in; when false, buffered and shown at once
 };
 
 export default function ChatPage() {
@@ -60,7 +63,6 @@ export default function ChatPage() {
   const [chatId, setChatId] = useState(null);
   const [chats, setChats] = useState([]);
   const [sidebarLoading, setSidebarLoading] = useState(true);
-  const [error, setError] = useState(null);
   const [sending, setSending] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -72,7 +74,9 @@ export default function ChatPage() {
   const abortControllerRef = useRef(null);
   const autoScrollRef = useRef(true);
   const scrollRafRef = useRef(null);
+  const createdChatIdRef = useRef(null); // Chat we just created via stream meta; skip loadChat to avoid overwriting messages
   const [canScrollDown, setCanScrollDown] = useState(false);
+  const [showCopyFeedback, setShowCopyFeedback] = useState(false);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -161,25 +165,30 @@ export default function ChatPage() {
   }, [messages.length]);
 
   // Sync URL -> chat: load chat when chatId is in URL; clear when not (e.g. /chat)
+  // Skip loadChat when we just created this chat (got meta from our own stream) so we don't overwrite in-flight messages
   useEffect(() => {
     if (urlChatId) {
+      if (createdChatIdRef.current === urlChatId) {
+        setChatId(urlChatId);
+        createdChatIdRef.current = null;
+        return;
+      }
       const alreadyShowing = chatId === urlChatId && messages.length > 0;
       if (!alreadyShowing) loadChat(urlChatId);
     } else {
+      createdChatIdRef.current = null;
       setChatId(null);
       setMessages([]);
-      setError(null);
     }
   }, [urlChatId]);
 
   const loadChat = (id) => {
-    setError(null);
     setChatId(id);
     getChat(id)
       .then((data) => setMessages(data.messages || []))
       .catch((err) => {
-        setError(err.message || 'Couldn’t load chat.');
-        setMessages([]);
+        const errorText = err.message || 'Could not load chat.';
+        setMessages([{ role: 'assistant', content: errorText, error: true }]);
       });
   };
 
@@ -205,13 +214,25 @@ export default function ChatPage() {
     abortControllerRef.current?.abort();
   };
 
+  const handleCopyConversation = () => {
+    if (!navigator.clipboard || messages.length === 0) return;
+    const lines = messages.map((msg) => {
+      const label = msg.role === 'user' ? 'User' : 'Assistant';
+      const text = getMessageText(msg.content);
+      return `${label}: ${text}`;
+    });
+    navigator.clipboard.writeText(lines.join('\n\n')).then(() => {
+      setShowCopyFeedback(true);
+      setTimeout(() => setShowCopyFeedback(false), 2000);
+    });
+  };
+
   const handleRegenerate = (assistantIndex) => {
     if (assistantIndex <= 0 || sending) return;
     const userMsg = messages[assistantIndex - 1];
     const userText = userMsg && getMessageText(userMsg.content);
     if (!userText) return;
 
-    setError(null);
     setSending(true);
     setStreaming(true);
     autoScrollRef.current = true;
@@ -229,22 +250,24 @@ export default function ChatPage() {
           thinking_budget: settings.thinking_budget,
           enabled_tools: settings.enabled_tools ?? undefined,
           mood: getStoredTheme()?.theme ?? undefined,
+          stream: settings.stream,
         },
       },
       {
         signal: abortControllerRef.current.signal,
         onMeta: (data) => {
+          if (data.chat_id) createdChatIdRef.current = data.chat_id;
           setChatId(data.chat_id);
           if (data.chat_id) navigate(`/chat/${data.chat_id}`);
         },
         onDelta: (delta) => {
           setMessages((prev) => {
             const next = [...prev];
-            const last = next[next.length - 1];
-            if (last && last.role === 'assistant') {
-              next[next.length - 1] = {
-                ...last,
-                content: (last.content || '') + delta,
+            const slot = next[assistantIndex];
+            if (slot && slot.role === 'assistant') {
+              next[assistantIndex] = {
+                ...slot,
+                content: (slot.content || '') + delta,
               };
             }
             return next;
@@ -256,21 +279,34 @@ export default function ChatPage() {
         onTheme: (data) => {
           if (data.theme) applyTheme(data.theme, true);
         },
-        onDone: () => {
+        onDone: (data) => {
           setSending(false);
           setStreaming(false);
+          if (data?.model) {
+            setMessages((prev) => {
+              const next = [...prev];
+              const slot = next[assistantIndex];
+              if (slot && slot.role === 'assistant') {
+                next[assistantIndex] = { ...slot, model: data.model };
+              }
+              return next;
+            });
+          }
           playCompletionSound();
         },
         onError: (data) => {
-          setError(data.error || 'Something went wrong. Try again.');
           setSending(false);
           setStreaming(false);
+          const errorText = data.error || 'Something went wrong. Try again.';
           setMessages((prev) => {
-            const last = prev[prev.length - 1];
-            if (last && last.role === 'assistant' && !last.content) {
-              return prev.slice(0, -1);
+            const next = [...prev];
+            const slot = next[assistantIndex];
+            if (slot && slot.role === 'assistant') {
+              next[assistantIndex] = { ...slot, content: errorText, error: true };
+            } else {
+              next.push({ role: 'assistant', content: errorText, error: true });
             }
-            return prev;
+            return next;
           });
         },
       }
@@ -278,7 +314,6 @@ export default function ChatPage() {
   };
 
   const handleSend = (text, options = {}) => {
-    setError(null);
     setSending(true);
     setStreaming(true);
     autoScrollRef.current = true;
@@ -289,10 +324,11 @@ export default function ChatPage() {
       ...(options.images?.length && { images: options.images }),
       ...(options.files?.length && { files: options.files }),
     };
-    setMessages((prev) => [...prev, userMessage]);
-
     const assistantPlaceholder = { role: 'assistant', content: '' };
-    setMessages((prev) => [...prev, assistantPlaceholder]);
+    setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
+
+    // Bind this stream to the new assistant slot so overlapping requests don't mix responses
+    const assistantIndex = messages.length + 1;
 
     abortControllerRef.current = new AbortController();
     sendMessage(
@@ -308,22 +344,24 @@ export default function ChatPage() {
           thinking_budget: settings.thinking_budget,
           enabled_tools: settings.enabled_tools ?? undefined,
           mood: getStoredTheme()?.theme ?? undefined,
+          stream: settings.stream,
         },
       },
       {
         signal: abortControllerRef.current.signal,
         onMeta: (data) => {
+          if (data.chat_id) createdChatIdRef.current = data.chat_id;
           setChatId(data.chat_id);
           if (data.chat_id) navigate(`/chat/${data.chat_id}`);
         },
         onDelta: (delta) => {
           setMessages((prev) => {
             const next = [...prev];
-            const last = next[next.length - 1];
-            if (last && last.role === 'assistant') {
-              next[next.length - 1] = {
-                ...last,
-                content: (last.content || '') + delta,
+            const slot = next[assistantIndex];
+            if (slot && slot.role === 'assistant') {
+              next[assistantIndex] = {
+                ...slot,
+                content: (slot.content || '') + delta,
               };
             }
             return next;
@@ -335,21 +373,34 @@ export default function ChatPage() {
         onTheme: (data) => {
           if (data.theme) applyTheme(data.theme, true);
         },
-        onDone: () => {
+        onDone: (data) => {
           setSending(false);
           setStreaming(false);
+          if (data?.model) {
+            setMessages((prev) => {
+              const next = [...prev];
+              const slot = next[assistantIndex];
+              if (slot && slot.role === 'assistant') {
+                next[assistantIndex] = { ...slot, model: data.model };
+              }
+              return next;
+            });
+          }
           playCompletionSound();
         },
         onError: (data) => {
-          setError(data.error || 'Something went wrong. Try again.');
           setSending(false);
           setStreaming(false);
+          const errorText = data.error || 'Something went wrong. Try again.';
           setMessages((prev) => {
-            const last = prev[prev.length - 1];
-            if (last && last.role === 'assistant' && !last.content) {
-              return prev.slice(0, -1);
+            const next = [...prev];
+            const slot = next[assistantIndex];
+            if (slot && slot.role === 'assistant') {
+              next[assistantIndex] = { ...slot, content: errorText, error: true };
+            } else {
+              next.push({ role: 'assistant', content: errorText, error: true });
             }
-            return prev;
+            return next;
           });
         },
       }
@@ -363,7 +414,19 @@ export default function ChatPage() {
         currentChatId={chatId}
         onSelectChat={handleSelectChat}
         onNewChat={handleNewChat}
-        onOpenSettings={() => setSettingsModalOpen(true)}
+        onOpenSettings={() => {
+          setSettingsModalOpen(true);
+          getSettings()
+            .then((apiSettings) => {
+              const stored = loadStoredSettings();
+              setSettings((prev) => ({
+                ...prev,
+                ...apiSettings,
+                ...stored,
+              }));
+            })
+            .catch(() => {});
+        }}
         loading={sidebarLoading}
         expanded={false}
       />
@@ -375,11 +438,6 @@ export default function ChatPage() {
       />
       <div className="chat-main-wrap">
         <main className="chat-main">
-          {error && (
-          <div className="chat-page__error" role="alert">
-            {error}
-          </div>
-        )}
         {messages.length === 0 && !sending ? (
           <div className="chat-page__empty" aria-hidden />
         ) : (
@@ -429,6 +487,9 @@ export default function ChatPage() {
           onStop={handleStop}
           disabled={sending}
           isStreaming={streaming}
+          onCopyConversation={handleCopyConversation}
+          canCopyConversation={messages.length > 0}
+          copyFeedback={showCopyFeedback}
         />
         </main>
       </div>

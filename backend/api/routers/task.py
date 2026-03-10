@@ -68,4 +68,4 @@ async def run_task(body: TaskRequest, request: Request):
                     break
                 yield ": keepalive\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(event_stream(), media_type="text/event-stream; charset=utf-8")

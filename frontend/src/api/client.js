@@ -1,9 +1,14 @@
 /**
  * API base URL when running in Electron (set by preload) or from env. Empty = same origin / Vite proxy.
+ * In production build, defaults to http://localhost:8000 so the app finds the backend.
  */
 export function getApiBase() {
   if (typeof window !== 'undefined' && window.__AKIRA_API__) return window.__AKIRA_API__;
-  return (import.meta.env && import.meta.env.VITE_API_URL) || '';
+  const fromEnv = import.meta.env?.VITE_API_URL;
+  if (fromEnv) return fromEnv;
+  // Production build: no Vite proxy, so default to backend port 8000
+  if (import.meta.env?.PROD) return 'http://localhost:8000';
+  return '';
 }
 
 /**

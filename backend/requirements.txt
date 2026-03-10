@@ -1,2 +1,2 @@
--r backend/requirements.txt
 mss>=9.0.0
+requests>=2.28.0

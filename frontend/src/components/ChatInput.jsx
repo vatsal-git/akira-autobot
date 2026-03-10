@@ -5,7 +5,7 @@ const MAX_IMAGES = 5;
 const MAX_OTHER_FILES = 5;
 const IMAGE_TYPES = /^image\/(jpeg|png|gif|webp)$/i;
 
-export const ChatInput = forwardRef(function ChatInput({ onSend, onStop, disabled, isStreaming = false, placeholder = '', onTyping }, ref) {
+export const ChatInput = forwardRef(function ChatInput({ onSend, onStop, disabled, isStreaming = false, placeholder = '', onTyping, onCopyConversation, canCopyConversation = false, copyFeedback = false }, ref) {
   const [value, setValue] = useState('');
   const [isExpanded, setIsExpanded] = useState(false);
   const [images, setImages] = useState([]); // { data, media_type, name }
@@ -146,12 +146,24 @@ export const ChatInput = forwardRef(function ChatInput({ onSend, onStop, disable
       {(images.length > 0 || otherFiles.length > 0) && (
         <div className="chat-input__attachments">
           {images.map((img, i) => (
-            <span key={`img-${i}`} className="chat-input__attachment-pill">
-              <span className="chat-input__attachment-name">{img.name || 'Image'}</span>
-              <button type="button" className="chat-input__attachment-remove" onClick={() => removeImage(i)} aria-label="Remove attachment">
-                ×
+            <div key={`img-${i}`} className="chat-input__image-preview">
+              <img
+                src={`data:${img.media_type || 'image/png'};base64,${img.data}`}
+                alt={img.name || 'Pasted image'}
+                className="chat-input__image-preview-img"
+              />
+              <button
+                type="button"
+                className="chat-input__image-preview-remove"
+                onClick={() => removeImage(i)}
+                aria-label={`Remove ${img.name || 'image'}`}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden>
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
               </button>
-            </span>
+            </div>
           ))}
           {otherFiles.map((f, i) => (
             <span key={`file-${i}`} className="chat-input__attachment-pill">
@@ -171,11 +183,32 @@ export const ChatInput = forwardRef(function ChatInput({ onSend, onStop, disable
               aria-label="Attach file"
               onClick={openFileSelector}
             >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
                 <line x1="12" y1="5" x2="12" y2="19" />
                 <line x1="5" y1="12" x2="19" y2="12" />
               </svg>
             </button>
+            {onCopyConversation && (
+              <button
+                type="button"
+                className="chat-input__icon"
+                aria-label={copyFeedback ? 'Copied' : 'Copy conversation'}
+                title={copyFeedback ? 'Copied' : 'Copy conversation'}
+                disabled={!canCopyConversation}
+                onClick={onCopyConversation}
+              >
+                {copyFeedback ? (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+                    <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+                  </svg>
+                )}
+              </button>
+            )}
           </div>
           {isExpanded ? (
             <textarea

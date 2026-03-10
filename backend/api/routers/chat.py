@@ -126,18 +126,18 @@ async def _chat_event_stream(
     thinking_budget: int,
     enabled_tools_map: Optional[Dict[str, bool]],
     mood: Optional[str] = None,
+    stream: bool = True,
 ):
-    """Async generator: yields SSE lines with meta, delta, done/error; handles disconnect and heartbeat."""
+    """Async generator: yields SSE lines with meta, delta, done/error; handles disconnect and heartbeat.
+    When stream=False, collects the full response then yields meta, one delta, done."""
     request_id = str(uuid.uuid4())
-    last_yield_time = asyncio.get_event_loop().time()
     stream_start = time.monotonic()
     full_response = ""
 
     try:
         yield f"event: meta\ndata: {json.dumps({'chat_id': chat_id, 'request_id': request_id})}\n\n"
-        last_yield_time = asyncio.get_event_loop().time()
 
-        stream = llm.invoke_llm_streaming(
+        stream_gen = llm.invoke_llm_streaming(
             user_message=user_content,
             history=history_messages,
             max_tokens=max_tokens,
@@ -147,45 +147,94 @@ async def _chat_event_stream(
             enabled_tools_map=enabled_tools_map,
             mood=mood,
         )
-        stream_anext = stream.__anext__
-        while True:
-            if await request.is_disconnected():
-                logger.info(
-                    "Client disconnected, request_id=%s chat_id=%s",
-                    request_id,
-                    chat_id,
-                )
-                return
-            try:
-                chunk = await asyncio.wait_for(
-                    stream_anext(), timeout=SSE_HEARTBEAT_INTERVAL
-                )
-            except StopAsyncIteration:
-                break
-            except asyncio.TimeoutError:
-                yield ": heartbeat\n\n"
-                continue
-            if time.monotonic() - stream_start > STREAM_TOTAL_TIMEOUT:
-                yield f"event: error\ndata: {json.dumps({'error': 'Stream duration timeout', 'code': 'timeout'})}\n\n"
-                return
-            if isinstance(chunk, dict) and chunk.get("type") == "settings":
-                payload = {k: v for k, v in chunk.items() if k != "type"}
-                yield f"event: settings\ndata: {json.dumps(payload)}\n\n"
-            elif isinstance(chunk, dict) and chunk.get("type") == "theme":
-                payload = {k: v for k, v in chunk.items() if k != "type"}
-                yield f"event: theme\ndata: {json.dumps(payload)}\n\n"
-            else:
-                full_response += chunk
-                yield f"event: delta\ndata: {json.dumps({'delta': chunk})}\n\n"
-            last_yield_time = asyncio.get_event_loop().time()
+        stream_anext = stream_gen.__anext__
 
+        if not stream:
+            # Non-streaming: consume entire response, then yield one delta
+            while True:
+                if await request.is_disconnected():
+                    logger.info(
+                        "Client disconnected, request_id=%s chat_id=%s",
+                        request_id,
+                        chat_id,
+                    )
+                    return
+                try:
+                    chunk = await asyncio.wait_for(
+                        stream_anext(), timeout=SSE_HEARTBEAT_INTERVAL
+                    )
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    continue
+                if time.monotonic() - stream_start > STREAM_TOTAL_TIMEOUT:
+                    yield f"event: error\ndata: {json.dumps({'error': 'Stream duration timeout', 'code': 'timeout'})}\n\n"
+                    return
+                if isinstance(chunk, dict) and chunk.get("type") == "settings":
+                    payload = {k: v for k, v in chunk.items() if k != "type"}
+                    yield f"event: settings\ndata: {json.dumps(payload)}\n\n"
+                elif isinstance(chunk, dict) and chunk.get("type") == "theme":
+                    payload = {k: v for k, v in chunk.items() if k != "type"}
+                    yield f"event: theme\ndata: {json.dumps(payload)}\n\n"
+                else:
+                    full_response += chunk
+            # Single delta with full response
+            if full_response:
+                yield f"event: delta\ndata: {json.dumps({'delta': full_response})}\n\n"
+        else:
+            # Streaming: yield each chunk as delta
+            while True:
+                if await request.is_disconnected():
+                    logger.info(
+                        "Client disconnected, request_id=%s chat_id=%s",
+                        request_id,
+                        chat_id,
+                    )
+                    return
+                try:
+                    chunk = await asyncio.wait_for(
+                        stream_anext(), timeout=SSE_HEARTBEAT_INTERVAL
+                    )
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"
+                    continue
+                if time.monotonic() - stream_start > STREAM_TOTAL_TIMEOUT:
+                    yield f"event: error\ndata: {json.dumps({'error': 'Stream duration timeout', 'code': 'timeout'})}\n\n"
+                    return
+                if isinstance(chunk, dict) and chunk.get("type") == "settings":
+                    payload = {k: v for k, v in chunk.items() if k != "type"}
+                    yield f"event: settings\ndata: {json.dumps(payload)}\n\n"
+                elif isinstance(chunk, dict) and chunk.get("type") == "theme":
+                    payload = {k: v for k, v in chunk.items() if k != "type"}
+                    yield f"event: theme\ndata: {json.dumps(payload)}\n\n"
+                else:
+                    full_response += chunk
+                    yield f"event: delta\ndata: {json.dumps({'delta': chunk})}\n\n"
+
+        model_used = None
+        try:
+            if hasattr(llm.provider, "get_model_id"):
+                model_used = llm.provider.get_model_id()
+        except Exception:
+            pass
+        # Avoid blank assistant message (e.g. model returned no text and no tool output)
+        if not (full_response or "").strip():
+            full_response = "I didn't get a response for that. Try asking again or rephrasing."
+            yield f"event: delta\ndata: {json.dumps({'delta': full_response})}\n\n"
         assistant_msg = {
             "role": "assistant",
             "content": full_response,
             "timestamp": datetime.now().isoformat(),
         }
+        if model_used:
+            assistant_msg["model"] = model_used
         llm.save_to_history(assistant_msg, chat_id)
-        yield f"event: done\ndata: {json.dumps({'chat_id': chat_id})}\n\n"
+        done_payload = {"chat_id": chat_id}
+        if model_used:
+            done_payload["model"] = model_used
+        yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
 
     except asyncio.CancelledError:
         logger.info("Stream cancelled request_id=%s chat_id=%s", request_id, chat_id)
@@ -238,6 +287,7 @@ async def chat_stream(body: ChatRequest, request: Request):
     thinking_enabled = settings.get("thinking_enabled", True)
     thinking_budget = settings.get("thinking_budget", 16000)
     mood = settings.get("mood")  # Agent's current mood; injected into system prompt at send time
+    stream = settings.get("stream", True)  # When False, buffer full response then send one delta
 
     message = body.message
 
@@ -291,8 +341,9 @@ async def chat_stream(body: ChatRequest, request: Request):
             thinking_budget=thinking_budget,
             enabled_tools_map=enabled_tools_map,
             mood=mood,
+            stream=stream,
         ),
-        media_type="text/event-stream",
+        media_type="text/event-stream; charset=utf-8",
     )
 
 

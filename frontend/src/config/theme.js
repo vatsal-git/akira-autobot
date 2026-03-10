@@ -22,25 +22,25 @@ const COLOR_KEYS = [
   'color-error-bg',
 ];
 
-/** Neutral / moodless — light, no strong mood */
+/** Neutral — black and white, no color */
 const neutral = {
-  'color-fg': '#0a0909',
-  'color-fg-muted': '#44403c',
-  'color-bg': '#e0d4ce',
-  'color-bg-main': '#d4c4bc',
-  'color-bg-sidebar': '#c4b0a6',
-  'color-bg-elevated': '#f2ebe6',
-  'color-bg-subtle': 'rgba(0,0,0,0.08)',
-  'color-border': '#b8a399',
-  'color-bubble-user': '#fff',
-  'color-highlight': '#c8ff3d',
-  'color-secondary': '#0369a1',
-  'color-send-btn': '#a01d3a',
-  'color-send-btn-hover': '#7f162f',
-  'color-primary': '#a01d3a',
-  'color-primary-hover': '#7f162f',
-  'color-error': '#991b1b',
-  'color-error-bg': '#fee2e2',
+  'color-fg': '#0a0a0a',
+  'color-fg-muted': '#525252',
+  'color-bg': '#fafafa',
+  'color-bg-main': '#f5f5f5',
+  'color-bg-sidebar': '#e5e5e5',
+  'color-bg-elevated': '#ffffff',
+  'color-bg-subtle': 'rgba(0,0,0,0.06)',
+  'color-border': '#d4d4d4',
+  'color-bubble-user': '#ffffff',
+  'color-highlight': '#a3a3a3',
+  'color-secondary': '#525252',
+  'color-send-btn': '#262626',
+  'color-send-btn-hover': '#0a0a0a',
+  'color-primary': '#171717',
+  'color-primary-hover': '#0a0a0a',
+  'color-error': '#0a0a0a',
+  'color-error-bg': '#e5e5e5',
 };
 
 /** Anxious — dim, contained */

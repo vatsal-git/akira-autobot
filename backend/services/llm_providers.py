@@ -148,6 +148,17 @@ class BaseLLMProvider(ABC):
         """Return the model identifier used for the last completion (for display in UI)."""
         return getattr(self, "model", None) or "unknown"
 
+    def get_context_window_tokens(self) -> int:
+        """Total context window (input + output) for proactive trimming. Override or set LLM_CONTEXT_WINDOW."""
+        try:
+            return int(os.getenv("LLM_CONTEXT_WINDOW", "200000"))
+        except (TypeError, ValueError):
+            return 200000
+
+    def get_max_output_cap_tokens(self) -> int | None:
+        """If set, output max_tokens is capped to this value (OpenRouter). None = no extra cap."""
+        return None
+
 
 class AnthropicProvider(BaseLLMProvider):
     """Provider for Anthropic Claude models via AWS Bedrock"""
@@ -159,6 +170,12 @@ class AnthropicProvider(BaseLLMProvider):
 
     def get_model_id(self) -> str:
         return os.getenv("CLAUDE_INFERENCE_PROFILE", "anthropic")
+
+    def get_context_window_tokens(self) -> int:
+        try:
+            return int(os.getenv("CLAUDE_CONTEXT_WINDOW", os.getenv("LLM_CONTEXT_WINDOW", "200000")))
+        except (TypeError, ValueError):
+            return 200000
 
     def _get_bedrock_client(self):
         self.logger.debug("Creating Bedrock client")
@@ -482,6 +499,15 @@ class OpenRouterProvider(BaseLLMProvider):
         except (TypeError, ValueError):
             self._max_output_tokens = 32768
         self._max_output_tokens = max(1, min(self._max_output_tokens, 65536))
+
+    def get_context_window_tokens(self) -> int:
+        try:
+            return int(os.getenv("OPENROUTER_CONTEXT_WINDOW", os.getenv("LLM_CONTEXT_WINDOW", "131072")))
+        except (TypeError, ValueError):
+            return 131072
+
+    def get_max_output_cap_tokens(self) -> int:
+        return self._max_output_tokens
 
     def _get_current_model(self) -> str:
         with self._model_lock:

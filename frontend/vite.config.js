@@ -9,26 +9,27 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['vite.svg', 'logo.jpg'],
+      includeAssets: ['vite.svg', 'akira-icon.svg'],
       manifest: {
         name: 'Akira',
         short_name: 'Akira',
-        description: 'Akira – your AI assistant',
-        theme_color: '#0d0d0d',
-        background_color: '#0d0d0d',
+        description:
+          'Akira — your conversational AI assistant: clear answers, tools, and memory.',
+        theme_color: '#dc2438',
+        background_color: '#1a1a1a',
         display: 'standalone',
         orientation: 'portrait-primary',
         scope: '/',
         start_url: '/',
         icons: [
           {
-            src: '/vite.svg',
+            src: '/akira-icon.svg',
             sizes: '192x192',
             type: 'image/svg+xml',
             purpose: 'any',
           },
           {
-            src: '/vite.svg',
+            src: '/akira-icon.svg',
             sizes: '512x512',
             type: 'image/svg+xml',
             purpose: 'any maskable',

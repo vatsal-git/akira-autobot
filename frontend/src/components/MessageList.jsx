@@ -1,15 +1,38 @@
 import React from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MermaidChart } from './MermaidChart';
 import { CodeBlock } from './CodeBlock';
 
-/** Backend may append `\n[Sent at: <iso>]` — strip from body so it is not shown in the chat. */
-const SENT_AT_SUFFIX_REGEX = /\n\[{1,2}Sent at: [^\]]+\]{1,2}$/;
+/** react-markdown only allows http(s) etc. by default; tool screenshots use data:image/... URLs. */
+function akiraMarkdownUrlTransform(url) {
+  if (typeof url === 'string' && /^data:image\//i.test(url)) {
+    return url;
+  }
+  return defaultUrlTransform(url);
+}
 
-function stripSentAtSuffix(str) {
+const markdownCommonProps = {
+  remarkPlugins: [remarkGfm],
+  urlTransform: akiraMarkdownUrlTransform,
+};
+
+/**
+ * Backend may append `[Sent at: <iso>]` to message text for the model; the model may echo it.
+ * Strip from the end of the string (including trailing whitespace / CRLF / repeated lines).
+ */
+const SENT_AT_END_BLOCK = /\r?\n\[{1,2}Sent at:\s*[^\]\r\n]+\]{1,2}\s*$/;
+const SENT_AT_WHOLE_MESSAGE = /^\[{1,2}Sent at:\s*[^\]\r\n]+\]{1,2}\s*$/;
+
+export function stripSentAtSuffix(str) {
   if (typeof str !== 'string') return str;
-  return str.replace(SENT_AT_SUFFIX_REGEX, '');
+  let s = str;
+  for (let i = 0; i < 8; i++) {
+    const next = s.replace(SENT_AT_END_BLOCK, '').replace(SENT_AT_WHOLE_MESSAGE, '');
+    if (next === s) break;
+    s = next;
+  }
+  return s;
 }
 
 /**
@@ -18,25 +41,83 @@ function stripSentAtSuffix(str) {
  * @returns {string}
  */
 export function getMessageText(content) {
-  if (typeof content === 'string') return content;
+  if (content == null) return '';
+  if (typeof content === 'string') return stripSentAtSuffix(content);
   if (Array.isArray(content)) {
     const block = content.find((b) => b && b.type === 'text');
-    return block && block.text ? block.text : '';
+    const raw = block && block.text ? block.text : '';
+    return stripSentAtSuffix(raw);
   }
-  return '';
+  return stripSentAtSuffix(String(content));
 }
 
 const THINKING_BLOCK_REGEX = /<details[^>]*>\s*<summary[^>]*>([\s\S]*?)<\/summary>\s*([\s\S]*?)<\/details>/i;
 
-/** Opening tag for thinking block (backend: <details><summary>Thinking</summary>\n\n). */
-const THINKING_OPEN_REGEX = /<details[^>]*>\s*<summary[^>]*>\s*Thinking\s*<\/summary>\s*/i;
+/**
+ * Skip complete <details>...</details> blocks from the start of text; return the first
+ * unclosed block's start index and the slice after its opening <details> tag (or null).
+ */
+function findFirstUnclosedDetailsTail(text) {
+  if (!text || typeof text !== 'string') return null;
+  let i = 0;
+  while (i < text.length) {
+    const slice = text.slice(i);
+    const rel = slice.search(/<details[^>]*>/i);
+    if (rel < 0) return null;
+    const openMatch = slice.slice(rel).match(/^<details[^>]*>/i);
+    if (!openMatch) return null;
+    const blockStart = i + rel;
+    const absOpenEnd = blockStart + openMatch[0].length;
+    const after = text.slice(absOpenEnd);
+    const closeRel = after.indexOf('</details>');
+    if (closeRel === -1) {
+      return { blockStart, afterOpen: after };
+    }
+    i = absOpenEnd + closeRel + '</details>'.length;
+  }
+  return null;
+}
 
-/** Opening tag for tool block: <details>...<summary>Tool Use: name</summary> */
-const TOOL_OPEN_REGEX = /<details[^>]*>\s*<summary[^>]*>([^<]*)<\/summary>\s*/i;
+/**
+ * Parse content after <details> until </details> (or EOF): summary label + body.
+ * Does not require </summary> or </details> to be present yet.
+ * @param {string} afterOpen - text immediately after the opening <details> tag
+ * @returns {{ summary: string, body: string }}
+ */
+function parseDetailsOpenTail(afterOpen) {
+  const rest = afterOpen.replace(/^\s*/, '');
+  const sm = rest.match(/^<summary[^>]*>/i);
+  if (!sm) {
+    return { summary: 'Thinking', body: '' };
+  }
+  const afterSm = rest.slice(sm[0].length);
+  const sc = afterSm.indexOf('</summary>');
+  let summary;
+  let body;
+  if (sc === -1) {
+    summary = afterSm.replace(/\s+/g, ' ').trim() || '…';
+    body = '';
+  } else {
+    summary = afterSm.slice(0, sc).replace(/\s+/g, ' ').trim() || '…';
+    body = afterSm.slice(sc + '</summary>'.length).replace(/^\s*/, '');
+  }
+  return { summary, body };
+}
+
+/** Prefer Tool Use while summary still streaming ("To…" vs "Th…"). */
+function isToolStreamingSummary(summary) {
+  const s = summary.trim();
+  if (/^tool use:/i.test(s)) return true;
+  if (/^think/i.test(s)) return false;
+  if (/^th/i.test(s)) return false;
+  if (/^to/i.test(s)) return true;
+  return false;
+}
 
 /**
  * Parse assistant content: complete blocks + streaming (incomplete) blocks.
- * When thinking/tool block starts but </details> hasn't arrived yet, we show an expanded block and stream into it.
+ * When a <details> block has no </details> yet, show the expandable UI as soon as the
+ * opening <details> tag is complete — no need to wait for </summary> or </details>.
  * @param {string} content
  * @returns {{ main: string, thinking: { summary: string, body: string } | null, thinkingStreaming: string | null, toolStreaming: { summary: string, body: string } | null }}
  */
@@ -48,58 +129,41 @@ function parseAssistantContent(content) {
   let thinkingStreaming = null;
   let toolStreaming = null;
 
-  // --- Thinking: check for streaming first (opening present, no closing) ---
-  const thinkingOpenMatch = main.match(THINKING_OPEN_REGEX);
-  if (thinkingOpenMatch) {
-    const openStart = main.indexOf(thinkingOpenMatch[0]);
-    const bodyStart = openStart + thinkingOpenMatch[0].length;
-    const closeIdx = main.indexOf('</details>', bodyStart);
-    if (closeIdx === -1) {
-      // Streaming: show thinking block expanded, body = everything after opening
-      thinkingStreaming = main.slice(bodyStart);
-      main = main.slice(0, openStart).trim();
-      return { main, thinking: null, thinkingStreaming, toolStreaming };
+  const unclosed = findFirstUnclosedDetailsTail(main);
+  if (unclosed) {
+    const { summary, body } = parseDetailsOpenTail(unclosed.afterOpen);
+    const openStart = unclosed.blockStart;
+    if (isToolStreamingSummary(summary)) {
+      toolStreaming = { summary, body };
+    } else {
+      thinkingStreaming = body;
     }
-    // Complete block: use full regex
-    const match = main.match(THINKING_BLOCK_REGEX);
-    if (match) {
-      const summary = match[1].replace(/\s+/g, ' ').trim();
-      const body = match[2].trim();
-      if (summary.toLowerCase() === 'thinking') {
-        thinking = { summary: summary || 'Thinking', body };
-        main = main.replace(THINKING_BLOCK_REGEX, '').trim();
-      }
+    main = stripSentAtSuffix(main.slice(0, openStart).trim());
+    return { main, thinking, thinkingStreaming, toolStreaming };
+  }
+
+  const match = main.match(THINKING_BLOCK_REGEX);
+  if (match) {
+    const summary = match[1].replace(/\s+/g, ' ').trim();
+    const body = match[2].trim();
+    if (summary.toLowerCase() === 'thinking') {
+      thinking = { summary: summary || 'Thinking', body: stripSentAtSuffix(body) };
+      main = main.replace(THINKING_BLOCK_REGEX, '').trim();
     }
   }
 
-  // --- Tool streaming: first occurrence of <details>...Tool Use:... without </details> ---
-  const toolOpenMatch = main.match(TOOL_OPEN_REGEX);
-  if (toolOpenMatch) {
-    const summary = toolOpenMatch[1].replace(/\s+/g, ' ').trim();
-    if (/Tool Use:\s*\S+/i.test(summary)) {
-      const openStart = main.indexOf(toolOpenMatch[0]);
-      const bodyStart = openStart + toolOpenMatch[0].length;
-      const closeIdx = main.indexOf('</details>', bodyStart);
-      if (closeIdx === -1) {
-        toolStreaming = { summary, body: main.slice(bodyStart) };
-        main = main.slice(0, openStart).trim();
-        return { main, thinking, thinkingStreaming, toolStreaming };
-      }
-    }
-  }
-
-  // No streaming; main may contain complete tool blocks — splitToolDetails handles that
-  return { main: main.trim(), thinking, thinkingStreaming, toolStreaming };
+  return { main: stripSentAtSuffix(main.trim()), thinking, thinkingStreaming, toolStreaming };
 }
 
 /**
- * Normalize thinking body so numbered list items stay on one line (e.g. "1.\ntext" → "1. text").
+ * Normalize markdown so numbered list items are not split across lines (models often emit "1.\\n**Title**").
+ * Does not merge "1. ... \\n\\n2. ..." — skips when the next non-whitespace line starts a new list item.
  * @param {string} body
  * @returns {string}
  */
-function normalizeThinkingBody(body) {
+function normalizeMarkdownLists(body) {
   if (!body || typeof body !== 'string') return body;
-  return body.replace(/(\d+)\.\s*\n/g, '$1. ');
+  return body.replace(/(\d+)\.\s*\n+(?!\s*\d+\.\s)/g, '$1. ');
 }
 
 /** ReactMarkdown components: render fenced code blocks with CodeBlock (wrap/expand), mermaid as diagrams, tables in a scroll wrapper. */
@@ -403,8 +467,8 @@ export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerate
                     </summary>
                     <div className="message-thinking__body">
                       <div className="message-thinking__md">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                          {normalizeThinkingBody(thinking.body)}
+                        <ReactMarkdown {...markdownCommonProps} components={markdownComponents}>
+                          {normalizeMarkdownLists(thinking.body)}
                         </ReactMarkdown>
                       </div>
                     </div>
@@ -415,8 +479,8 @@ export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerate
                     <summary className="message-thinking__summary">Thinking</summary>
                     <div className="message-thinking__body">
                       <div className="message-thinking__md">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                          {normalizeThinkingBody(thinkingStreaming)}
+                        <ReactMarkdown {...markdownCommonProps} components={markdownComponents}>
+                          {normalizeMarkdownLists(thinkingStreaming)}
                         </ReactMarkdown>
                       </div>
                     </div>
@@ -427,8 +491,8 @@ export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerate
                     <summary className="message-thinking__summary">{toolStreaming.summary}</summary>
                     <div className="message-thinking__body">
                       <div className="message-thinking__md">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                          {toolStreaming.body}
+                        <ReactMarkdown {...markdownCommonProps} components={markdownComponents}>
+                          {normalizeMarkdownLists(toolStreaming.body)}
                         </ReactMarkdown>
                       </div>
                     </div>
@@ -441,7 +505,9 @@ export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerate
                         return (
                           <div key={j} className="message__main-text">
                             {isAssistant ? (
-                              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{part.content}</ReactMarkdown>
+                              <ReactMarkdown {...markdownCommonProps} components={markdownComponents}>
+                                {normalizeMarkdownLists(part.content)}
+                              </ReactMarkdown>
                             ) : (
                               <div className="message__main-text-plain">{part.content}</div>
                             )}
@@ -454,8 +520,8 @@ export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerate
                             <summary className="message-thinking__summary">{part.summary}</summary>
                             <div className="message-thinking__body">
                               <div className="message-thinking__md">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                                  {normalizeThinkingBody(part.body)}
+                                <ReactMarkdown {...markdownCommonProps} components={markdownComponents}>
+                                  {normalizeMarkdownLists(part.body)}
                                 </ReactMarkdown>
                               </div>
                             </div>
@@ -471,7 +537,9 @@ export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerate
                             <div className="message-thinking__body">
                               {isToolUse ? (
                                 <div className="message-thinking__md">
-                                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{parsedTool.body}</ReactMarkdown>
+                                  <ReactMarkdown {...markdownCommonProps} components={markdownComponents}>
+                                    {normalizeMarkdownLists(parsedTool.body)}
+                                  </ReactMarkdown>
                                 </div>
                               ) : (
                                 <CodeBlock raw={parsedTool.body} />

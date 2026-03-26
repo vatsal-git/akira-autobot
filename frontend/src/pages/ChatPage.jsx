@@ -2,15 +2,26 @@ import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { MessageList, getMessageText } from '../components/MessageList';
 import ChatInput from '../components/ChatInput';
-import { CameraPreview } from '../components/CameraPreview';
 import { Sidebar } from '../components/Sidebar';
 import { SettingsModal } from '../components/SettingsModal';
 import { sendMessage } from '../api/chat';
 import { listChats, getChat } from '../api/history';
 import { getSettings } from '../api/settings';
-import { applyTheme, getStoredTheme } from '../config/theme';
 import { playCompletionSound } from '../utils/sound';
-import { useBrowserVoice, startListening, stopListening, speak, stopSpeaking } from '../utils/voice';
+import {
+  useBrowserVoice,
+  startListening,
+  stopListening,
+  isListening,
+  speak,
+  speakQueued,
+  stopSpeaking,
+  clearSpeakQueue,
+  whenSpeakQueueIdle,
+  isSynthesizerSpeaking,
+} from '../utils/voice';
+import { createStreamDictation } from '../utils/streamDictation';
+import { BRAND_NAME, BRAND_MEANING } from '../config/brand';
 
 const SETTINGS_STORAGE_KEY = 'akira_settings';
 
@@ -85,10 +96,14 @@ export default function ChatPage() {
   const pendingUserMessageRef = useRef(null);
   const performSendRef = useRef(null);
   const abortedRef = useRef(false);
+  /** Snapshot of messages (including failed assistant bubble) before clearing UI for recovery */
+  const preRecoveryMessagesRef = useRef(null);
+  const recoveryInProgressRef = useRef(false);
+  const chatIdRef = useRef(null);
   const [canScrollDown, setCanScrollDown] = useState(false);
   const [showCopyFeedback, setShowCopyFeedback] = useState(false);
-  // Bump when theme is applied from stream so Sidebar/UI re-renders and shows new theme
-  const [themeVersion, setThemeVersion] = useState(0);
+  /** True while the UI is cleared and a follow-up error-recovery request runs */
+  const [isDiagnosingError, setIsDiagnosingError] = useState(false);
   // Voice conversation: speak to Akira, hear reply
   const voiceSupport = useBrowserVoice();
   const [voiceMode, setVoiceMode] = useState(false);
@@ -97,8 +112,9 @@ export default function ChatPage() {
   const currentAssistantContentRef = useRef('');
   const voiceListenControlRef = useRef(null);
   const lastSendWasVoiceRef = useRef(false);
-  const cameraCaptureRef = useRef(null);
-
+  const streamDictationRef = useRef(null);
+  /** Monotonic id so callbacks from a replaced/aborted stream are ignored */
+  const streamGenerationRef = useRef(0);
   useEffect(() => {
     messagesRef.current = messages;
     autonomousModeRef.current = settings.autonomous_mode;
@@ -108,6 +124,10 @@ export default function ChatPage() {
   useEffect(() => {
     voiceModeRef.current = voiceMode;
   }, [voiceMode]);
+
+  useEffect(() => {
+    chatIdRef.current = chatId;
+  }, [chatId]);
 
   const scrollToBottom = (smooth = true) => {
     const el = messagesContainerRef.current;
@@ -250,8 +270,53 @@ export default function ChatPage() {
     });
   };
 
+  function resumeVoiceListeningIfNeeded() {
+    if (!voiceModeRef.current) return;
+    if (isSynthesizerSpeaking()) return;
+    if (voiceListenControlRef.current && isListening()) return;
+    if (voiceListenControlRef.current && !isListening()) {
+      voiceListenControlRef.current = null;
+    }
+    voiceListenControlRef.current = startListening({
+      onResult: (text) => {
+        if (!text.trim()) return;
+        voiceListenControlRef.current?.stop();
+        voiceListenControlRef.current = null;
+        setListening(false);
+        setInterimTranscript('');
+        lastSendWasVoiceRef.current = true;
+        performSendRef.current?.(text);
+      },
+      onInterim: setInterimTranscript,
+      onError: () => setListening(false),
+    });
+    setListening(true);
+  }
+
+  /**
+   * End any in-flight stream, TTS, and mic turn before starting a new user message.
+   * Returns the generation id for this request (callbacks must match it).
+   */
+  function prepareInterruptForNewUserMessage() {
+    streamGenerationRef.current += 1;
+    const generation = streamGenerationRef.current;
+    pendingUserMessageRef.current = null;
+    abortControllerRef.current?.abort();
+    streamDictationRef.current = null;
+    clearSpeakQueue();
+    stopSpeaking();
+    voiceListenControlRef.current?.stop();
+    voiceListenControlRef.current = null;
+    setListening(false);
+    setInterimTranscript('');
+    return generation;
+  }
+
   const handleStop = () => {
     abortedRef.current = true;
+    streamDictationRef.current = null;
+    clearSpeakQueue();
+    stopSpeaking();
     abortControllerRef.current?.abort();
   };
 
@@ -268,17 +333,179 @@ export default function ChatPage() {
     });
   };
 
+  /** Follow-up request so Akira can explain the failure; uses snapshot in preRecoveryMessagesRef */
+  function runErrorRecovery(errorText) {
+    if (!errorText || !preRecoveryMessagesRef.current) {
+      recoveryInProgressRef.current = false;
+      setIsDiagnosingError(false);
+      return;
+    }
+    const generation = prepareInterruptForNewUserMessage();
+    abortedRef.current = false;
+    currentAssistantContentRef.current = '';
+    streamDictationRef.current = null;
+    if (voiceModeRef.current) {
+      streamDictationRef.current = createStreamDictation({
+        enqueueSpeak: (chunk) => {
+          speakQueued(chunk).catch(() => {});
+        },
+        maxChunk: 100,
+      });
+    }
+    setSending(true);
+    setStreaming(true);
+    autoScrollRef.current = true;
+    abortControllerRef.current = new AbortController();
+    const recoveryMessage = `The assistant response failed with this error:\n${errorText}\n\nChat ID: ${chatIdRef.current || 'unknown'}\n\nPlease explain what likely went wrong and what the user should try next.`;
+    sendMessage(
+      {
+        message: recoveryMessage,
+        chat_id: chatIdRef.current || undefined,
+        error_recovery: true,
+        settings: {
+          temperature: settings.temperature,
+          max_tokens: settings.max_tokens,
+          thinking_enabled: settings.thinking_enabled,
+          thinking_budget: settings.thinking_budget,
+          enabled_tools: settings.enabled_tools ?? undefined,
+          stream: settings.stream,
+        },
+      },
+      {
+        signal: abortControllerRef.current.signal,
+        onMeta: (data) => {
+          if (generation !== streamGenerationRef.current) return;
+          if (data.chat_id) createdChatIdRef.current = data.chat_id;
+          setChatId(data.chat_id);
+          if (data.chat_id) navigate(`/chat/${data.chat_id}`);
+        },
+        onDelta: (delta) => {
+          if (generation !== streamGenerationRef.current) return;
+          currentAssistantContentRef.current += delta ?? '';
+          if (voiceModeRef.current && streamDictationRef.current) {
+            streamDictationRef.current.pushDelta(delta ?? '');
+          }
+        },
+        onSettings: (data) => {
+          if (generation !== streamGenerationRef.current) return;
+          setSettings((prev) => ({ ...prev, ...data }));
+        },
+        onDone: (data) => {
+          if (generation !== streamGenerationRef.current) return;
+          setSending(false);
+          setStreaming(false);
+          if (abortedRef.current) {
+            abortedRef.current = false;
+            const base = preRecoveryMessagesRef.current;
+            if (base) setMessages(base);
+            setIsDiagnosingError(false);
+            recoveryInProgressRef.current = false;
+            preRecoveryMessagesRef.current = null;
+            currentAssistantContentRef.current = '';
+            streamDictationRef.current = null;
+            if (voiceModeRef.current) resumeVoiceListeningIfNeeded();
+            return;
+          }
+          const diagnostic =
+            currentAssistantContentRef.current.trim() ||
+            'Something went wrong. Try again or change your request.';
+          currentAssistantContentRef.current = '';
+          const base = preRecoveryMessagesRef.current;
+
+          if (voiceModeRef.current && streamDictationRef.current) {
+            streamDictationRef.current.finish();
+            streamDictationRef.current = null;
+            whenSpeakQueueIdle().then(() => {
+              if (voiceModeRef.current) resumeVoiceListeningIfNeeded();
+            });
+          } else if (voiceModeRef.current) {
+            speak(diagnostic)
+              .catch(() => {})
+              .finally(() => {
+                if (voiceModeRef.current) resumeVoiceListeningIfNeeded();
+              });
+          }
+          
+          if (base && base.length) {
+            const lastIdx = base.length - 1;
+            const newMessages = [...base];
+            if (newMessages[lastIdx]?.role === 'assistant') {
+              newMessages[lastIdx] = {
+                ...newMessages[lastIdx],
+                content: diagnostic,
+                error: false,
+                recoveryDiagnostic: true,
+                timestamp: new Date().toISOString(),
+                ...(data?.model && { model: data.model }),
+              };
+            } else {
+              newMessages.push({
+                role: 'assistant',
+                content: diagnostic,
+                recoveryDiagnostic: true,
+                timestamp: new Date().toISOString(),
+                ...(data?.model && { model: data.model }),
+              });
+            }
+            setMessages(newMessages);
+          }
+          setIsDiagnosingError(false);
+          recoveryInProgressRef.current = false;
+          preRecoveryMessagesRef.current = null;
+          playCompletionSound();
+        },
+        onError: (data) => {
+          if (generation !== streamGenerationRef.current) return;
+          setSending(false);
+          setStreaming(false);
+          streamDictationRef.current = null;
+          clearSpeakQueue();
+          const base = preRecoveryMessagesRef.current;
+          setIsDiagnosingError(false);
+          recoveryInProgressRef.current = false;
+          preRecoveryMessagesRef.current = null;
+          currentAssistantContentRef.current = '';
+          const fallback = data.error || 'Could not get a diagnosis. Try again.';
+          if (base) {
+            setMessages([
+              ...base,
+              {
+                role: 'assistant',
+                content: `Could not diagnose: ${fallback}`,
+                error: true,
+                timestamp: new Date().toISOString(),
+              },
+            ]);
+          }
+        },
+      }
+    );
+  }
+
   const handleRegenerate = (assistantIndex) => {
     if (assistantIndex <= 0 || sending) return;
     const userMsg = messages[assistantIndex - 1];
     const userText = userMsg && getMessageText(userMsg.content);
     if (!userText) return;
 
+    const generation = prepareInterruptForNewUserMessage();
+    abortedRef.current = false;
+
     setSending(true);
     setStreaming(true);
     autoScrollRef.current = true;
     abortControllerRef.current = new AbortController();
     setMessages((prev) => [...prev.slice(0, assistantIndex), { role: 'assistant', content: '' }]);
+
+    streamDictationRef.current = null;
+    if (voiceModeRef.current) {
+      streamDictationRef.current = createStreamDictation({
+        enqueueSpeak: (chunk) => {
+          speakQueued(chunk).catch(() => {});
+        },
+        maxChunk: 100,
+      });
+    }
 
     sendMessage(
       {
@@ -290,18 +517,22 @@ export default function ChatPage() {
           thinking_enabled: settings.thinking_enabled,
           thinking_budget: settings.thinking_budget,
           enabled_tools: settings.enabled_tools ?? undefined,
-          mood: getStoredTheme()?.theme ?? undefined,
           stream: settings.stream,
         },
       },
       {
         signal: abortControllerRef.current.signal,
         onMeta: (data) => {
+          if (generation !== streamGenerationRef.current) return;
           if (data.chat_id) createdChatIdRef.current = data.chat_id;
           setChatId(data.chat_id);
           if (data.chat_id) navigate(`/chat/${data.chat_id}`);
         },
         onDelta: (delta) => {
+          if (generation !== streamGenerationRef.current) return;
+          if (voiceModeRef.current && streamDictationRef.current) {
+            streamDictationRef.current.pushDelta(delta ?? '');
+          }
           setMessages((prev) => {
             const next = [...prev];
             const slot = next[assistantIndex];
@@ -315,13 +546,11 @@ export default function ChatPage() {
           });
         },
         onSettings: (data) => {
+          if (generation !== streamGenerationRef.current) return;
           setSettings((prev) => ({ ...prev, ...data }));
         },
-        onTheme: (data) => {
-          const name = typeof data?.theme === 'string' ? data.theme.trim().toLowerCase() : '';
-          if (name && applyTheme(name, true)) setThemeVersion((v) => v + 1);
-        },
         onDone: (data) => {
+          if (generation !== streamGenerationRef.current) return;
           setSending(false);
           setStreaming(false);
           const sentAt = new Date().toISOString();
@@ -334,11 +563,32 @@ export default function ChatPage() {
             return next;
           });
           playCompletionSound();
+          if (voiceModeRef.current) {
+            if (streamDictationRef.current) {
+              streamDictationRef.current.finish();
+              streamDictationRef.current = null;
+              whenSpeakQueueIdle().then(() => {
+                if (voiceModeRef.current) resumeVoiceListeningIfNeeded();
+              });
+            } else {
+              resumeVoiceListeningIfNeeded();
+            }
+          } else {
+            streamDictationRef.current = null;
+          }
         },
         onError: (data) => {
+          if (generation !== streamGenerationRef.current) return;
           setSending(false);
           setStreaming(false);
+          streamDictationRef.current = null;
+          clearSpeakQueue();
           const errorText = data.error || 'Something went wrong. Try again.';
+
+          if (voiceModeRef.current) {
+            speak(`Error: ${errorText}`).catch(() => {});
+          }
+
           setMessages((prev) => {
             const next = [...prev];
             const slot = next[assistantIndex];
@@ -347,8 +597,12 @@ export default function ChatPage() {
             } else {
               next.push({ role: 'assistant', content: errorText, error: true, timestamp: new Date().toISOString() });
             }
-            return next;
+            preRecoveryMessagesRef.current = next;
+            return [];
           });
+          setIsDiagnosingError(true);
+          recoveryInProgressRef.current = true;
+          queueMicrotask(() => runErrorRecovery(errorText));
         },
       }
     );
@@ -367,6 +621,9 @@ export default function ChatPage() {
   };
 
   const performSend = (text, options = {}) => {
+    const generation = prepareInterruptForNewUserMessage();
+    abortedRef.current = false;
+
     setSending(true);
     setStreaming(true);
     autoScrollRef.current = true;
@@ -384,6 +641,16 @@ export default function ChatPage() {
     const assistantIndex = messagesRef.current.length + 1;
     currentAssistantContentRef.current = '';
 
+    streamDictationRef.current = null;
+    if (voiceModeRef.current) {
+      streamDictationRef.current = createStreamDictation({
+        enqueueSpeak: (chunk) => {
+          speakQueued(chunk).catch(() => {});
+        },
+        maxChunk: 100,
+      });
+    }
+
     abortControllerRef.current = new AbortController();
     sendMessage(
       {
@@ -397,19 +664,23 @@ export default function ChatPage() {
           thinking_enabled: settings.thinking_enabled,
           thinking_budget: settings.thinking_budget,
           enabled_tools: settings.enabled_tools ?? undefined,
-          mood: getStoredTheme()?.theme ?? undefined,
           stream: settings.stream,
         },
       },
       {
         signal: abortControllerRef.current.signal,
         onMeta: (data) => {
+          if (generation !== streamGenerationRef.current) return;
           if (data.chat_id) createdChatIdRef.current = data.chat_id;
           setChatId(data.chat_id);
           if (data.chat_id) navigate(`/chat/${data.chat_id}`);
         },
         onDelta: (delta) => {
+          if (generation !== streamGenerationRef.current) return;
           currentAssistantContentRef.current += delta ?? '';
+          if (voiceModeRef.current && streamDictationRef.current) {
+            streamDictationRef.current.pushDelta(delta ?? '');
+          }
           setMessages((prev) => {
             const next = [...prev];
             const slot = next[assistantIndex];
@@ -423,13 +694,11 @@ export default function ChatPage() {
           });
         },
         onSettings: (data) => {
+          if (generation !== streamGenerationRef.current) return;
           setSettings((prev) => ({ ...prev, ...data }));
         },
-        onTheme: (data) => {
-          const name = typeof data?.theme === 'string' ? data.theme.trim().toLowerCase() : '';
-          if (name && applyTheme(name, true)) setThemeVersion((v) => v + 1);
-        },
         onDone: (data) => {
+          if (generation !== streamGenerationRef.current) return;
           setSending(false);
           setStreaming(false);
           const sentAt = new Date().toISOString();
@@ -441,42 +710,53 @@ export default function ChatPage() {
             }
             return next;
           });
-          if (!abortedRef.current) {
+          const wasAborted = abortedRef.current;
+          if (!wasAborted) {
             playCompletionSound();
             scheduleAutonomousNext();
           } else {
             abortedRef.current = false;
+            streamDictationRef.current = null;
+            clearSpeakQueue();
+            stopSpeaking();
+            if (voiceModeRef.current) resumeVoiceListeningIfNeeded();
           }
-          // Voice mode: speak Akira's reply then start listening again (only if this reply was triggered by voice)
-          if (voiceModeRef.current && lastSendWasVoiceRef.current && currentAssistantContentRef.current) {
-            lastSendWasVoiceRef.current = false;
-            const raw = currentAssistantContentRef.current;
-            const speakable = raw.replace(/<details[\s\S]*?<\/details>/gi, '').trim();
-            if (speakable) {
-              speak(speakable).then(() => {
-                if (voiceModeRef.current) {
-                  voiceListenControlRef.current = startListening({
-                    onResult: (text) => {
-                      if (!text.trim()) return;
-                      voiceListenControlRef.current?.stop();
-                      setListening(false);
-                      setInterimTranscript('');
-                      lastSendWasVoiceRef.current = true;
-                      performSend(text);
-                    },
-                    onInterim: setInterimTranscript,
-                    onError: () => setListening(false),
+          if (!wasAborted && voiceModeRef.current) {
+            if (streamDictationRef.current) {
+              streamDictationRef.current.finish();
+              streamDictationRef.current = null;
+              whenSpeakQueueIdle().then(() => {
+                if (voiceModeRef.current) resumeVoiceListeningIfNeeded();
+              });
+            } else {
+              const raw = currentAssistantContentRef.current;
+              const speakable = raw.replace(/<details[\s\S]*?<\/details>/gi, '').trim();
+              if (speakable) {
+                speak(speakable)
+                  .catch(() => {})
+                  .finally(() => {
+                    if (voiceModeRef.current) resumeVoiceListeningIfNeeded();
                   });
-                  setListening(true);
-                }
-              }).catch(() => {});
+              } else {
+                resumeVoiceListeningIfNeeded();
+              }
             }
+          } else if (!wasAborted) {
+            streamDictationRef.current = null;
           }
         },
         onError: (data) => {
+          if (generation !== streamGenerationRef.current) return;
           setSending(false);
           setStreaming(false);
+          streamDictationRef.current = null;
+          clearSpeakQueue();
           const errorText = data.error || 'Something went wrong. Try again.';
+
+          if (voiceModeRef.current) {
+            speak(`Error: ${errorText}`).catch(() => {});
+          }
+
           setMessages((prev) => {
             const next = [...prev];
             const slot = next[assistantIndex];
@@ -485,9 +765,12 @@ export default function ChatPage() {
             } else {
               next.push({ role: 'assistant', content: errorText, error: true, timestamp: new Date().toISOString() });
             }
-            return next;
+            preRecoveryMessagesRef.current = next;
+            return [];
           });
-          if (!abortedRef.current) scheduleAutonomousNext();
+          setIsDiagnosingError(true);
+          recoveryInProgressRef.current = true;
+          queueMicrotask(() => runErrorRecovery(errorText));
           abortedRef.current = false;
         },
       }
@@ -497,36 +780,27 @@ export default function ChatPage() {
 
   const MAX_IMAGES = 5;
 
-  const getCameraImageIfNeeded = async () => {
-    if (!voiceModeRef.current || !cameraCaptureRef.current?.captureFrame) return null;
-    try {
-      const frame = await cameraCaptureRef.current.captureFrame();
-      return frame ? [frame] : null;
-    } catch {
-      return null;
-    }
-  };
-
   const handleSend = async (text, options = {}) => {
     if (autonomousModeRef.current && streaming) {
       pendingUserMessageRef.current = { text, options };
       return;
     }
-    const cameraImages = await getCameraImageIfNeeded();
-    const allImages = [...(cameraImages || []), ...(options?.images || [])].slice(0, MAX_IMAGES);
+    lastSendWasVoiceRef.current = false;
+    const allImages = (options?.images || []).slice(0, MAX_IMAGES);
     performSend(text, { ...options, images: allImages.length ? allImages : undefined });
   };
-
   const handleVoiceToggle = () => {
     if (!voiceSupport.supported) {
       alert('Voice conversation is not available in this browser. Use the Akira desktop app and ensure the frontend has been rebuilt (npm run build in the frontend folder).');
       return;
     }
     const next = !voiceMode;
+    voiceModeRef.current = next;
     setVoiceMode(next);
     if (!next) {
       voiceListenControlRef.current?.stop();
       voiceListenControlRef.current = null;
+      streamDictationRef.current = null;
       stopListening();
       stopSpeaking();
       setListening(false);
@@ -542,9 +816,7 @@ export default function ChatPage() {
         setListening(false);
         setInterimTranscript('');
         lastSendWasVoiceRef.current = true;
-        getCameraImageIfNeeded().then((cameraImages) => {
-          performSend(text, { images: cameraImages?.length ? cameraImages : undefined });
-        });
+        performSend(text);
       },
       onInterim: setInterimTranscript,
       onError: () => setListening(false),
@@ -554,7 +826,6 @@ export default function ChatPage() {
 
   return (
     <div className="chat-page">
-      {voiceMode && <CameraPreview show={true} className="chat-page__camera-preview" cameraCaptureRef={cameraCaptureRef} />}
       <Sidebar
         chats={chats}
         currentChatId={chatId}
@@ -575,6 +846,7 @@ export default function ChatPage() {
         }}
         loading={sidebarLoading}
         expanded={false}
+        tubeReplyActive={sending || streaming || isDiagnosingError}
       />
       <SettingsModal
         open={settingsModalOpen}
@@ -584,8 +856,22 @@ export default function ChatPage() {
       />
       <div className="chat-main-wrap">
         <main className="chat-main">
-        {messages.length === 0 && !sending ? (
-          <div className="chat-page__empty" aria-hidden />
+        {messages.length === 0 && !sending && !isDiagnosingError ? (
+          <div className="chat-page__empty" role="region" aria-label={`${BRAND_NAME} chat`}>
+            <div className="chat-page__empty-brand">
+              <p className="chat-page__empty-name">{BRAND_NAME}</p>
+              <p className="chat-page__empty-tagline">{BRAND_MEANING}</p>
+            </div>
+            <p className="chat-page__empty-hint">Type a message below to start.</p>
+          </div>
+        ) : messages.length === 0 && isDiagnosingError ? (
+          <div className="chat-page__diagnosing" role="status" aria-live="polite" aria-busy={streaming}>
+            <p className="chat-page__diagnosing-title">Diagnosing and fixing what went wrong</p>
+            <p className="chat-page__diagnosing-detail">
+              Hang on—Akira is looking at the error and what to try next.
+            </p>
+            <div className="chat-page__diagnosing-progress" aria-hidden />
+          </div>
         ) : (
           <>
             <div className="chat-page__messages">
@@ -633,7 +919,7 @@ export default function ChatPage() {
           ref={chatInputRef}
           onSend={handleSend}
           onStop={handleStop}
-          disabled={sending && !settings.autonomous_mode}
+          disabled={sending && !settings.autonomous_mode && !streaming}
           isStreaming={streaming}
           onCopyConversation={handleCopyConversation}
           canCopyConversation={messages.length > 0}

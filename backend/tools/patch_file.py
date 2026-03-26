@@ -3,10 +3,10 @@ Patch a range of lines in a text file. Use after read_file (with line numbers)
 to change only that range instead of rewriting the whole file.
 """
 import logging
-from pathlib import Path
-from typing import Optional
 
 from backend.core.file_access import atomic_write_text, is_write_allowed, resolve_path
+from backend.core.python_syntax import is_python_source_file
+from backend.core.source_syntax import is_syntax_checked_file, validate_source_syntax
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +114,11 @@ def call_tool(tool_input: dict, context=None):
         replacement = replacement + "\n"
     new_text = "".join(before) + replacement + "".join(after)
 
+    if is_syntax_checked_file(resolved):
+        syn_err = validate_source_syntax(resolved, new_text)
+        if syn_err:
+            return 200, {"success": False, "error": syn_err, "path": path_str}
+
     try:
         atomic_write_text(resolved, new_text, encoding=encoding)
     except OSError as err:
@@ -121,7 +126,7 @@ def call_tool(tool_input: dict, context=None):
         return 200, {"success": False, "error": str(err), "path": path_str}
 
     logger.info("Patched file %s lines %s-%s", path_str, s, e)
-    return 200, {
+    out = {
         "success": True,
         "path": path_str,
         "start_line": s,
@@ -129,3 +134,8 @@ def call_tool(tool_input: dict, context=None):
         "replaced_lines": e - s + 1,
         "filename": resolved.name,
     }
+    if is_syntax_checked_file(resolved):
+        out["syntax_ok"] = True
+    if is_python_source_file(resolved):
+        out["python_syntax_ok"] = True
+    return 200, out

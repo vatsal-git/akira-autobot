@@ -8,9 +8,13 @@ import App from './App.jsx'
 // Apply stored theme before first paint to avoid flash
 applyStoredTheme()
 
-// In Electron (desktop) we load from file:// so use HashRouter; web uses BrowserRouter
-const isDesktop = typeof window !== 'undefined' && window.__AKIRA_API__
-const Router = isDesktop ? HashRouter : BrowserRouter
+// file:// (packaged Electron) has no server path; web and Electron+dev use BrowserRouter
+const useHashRouter = typeof window !== 'undefined' && window.location.protocol === 'file:'
+const Router = useHashRouter ? HashRouter : BrowserRouter
+
+if (typeof window !== 'undefined' && window.akiraDesktop) {
+  document.documentElement.classList.add('akira-desktop-overlay')
+}
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

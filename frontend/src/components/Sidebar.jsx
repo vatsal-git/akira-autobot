@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { getCurrentThemeEmoji } from '../config/theme';
+import { BRAND_NAME, BRAND_MEANING } from '../config/brand';
+import { DesktopWindowControls } from './DesktopWindowControls';
 
 function sortChatsByTime(chats) {
   return [...chats].sort((a, b) => {
@@ -56,9 +57,71 @@ export function Sidebar({
   onOpenSettings,
   loading,
   expanded = false,
+  /** True while waiting on Akira after the user sends (boot → on; then blinks until reply completes). */
+  tubeReplyActive = false,
 }) {
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [historyExpandedGroup, setHistoryExpandedGroup] = useState(DATE_GROUP.TODAY);
+  const [bootComplete, setBootComplete] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  );
+  const [reducedMotion, setReducedMotion] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  );
+  const replyActiveRef = useRef(tubeReplyActive);
+  const wasTubeReplyActiveRef = useRef(false);
+  const [replyDurationSec, setReplyDurationSec] = useState(2.2);
+
+  const bootStyle = useMemo(
+    () => ({
+      '--tube-boot-delay': `${Math.random() * 0.35}s`,
+      '--tube-boot-duration': `${1.45 + Math.random() * 1.55}s`,
+    }),
+    []
+  );
+
+  useLayoutEffect(() => {
+    if (tubeReplyActive && !wasTubeReplyActiveRef.current) {
+      setReplyDurationSec(1.15 + Math.random() * 1.65);
+    }
+    wasTubeReplyActiveRef.current = tubeReplyActive;
+  }, [tubeReplyActive]);
+
+  const tubeInlineStyle = useMemo(() => {
+    if (tubeReplyActive) {
+      return { '--tube-reply-duration': `${replyDurationSec}s` };
+    }
+    if (!bootComplete && !reducedMotion) {
+      return bootStyle;
+    }
+    return undefined;
+  }, [tubeReplyActive, replyDurationSec, bootComplete, reducedMotion, bootStyle]);
+
+  useEffect(() => {
+    replyActiveRef.current = tubeReplyActive;
+  }, [tubeReplyActive]);
+
+  useEffect(() => {
+    if (tubeReplyActive) setBootComplete(true);
+  }, [tubeReplyActive]);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const sync = () => {
+      const on = mq.matches;
+      setReducedMotion(on);
+      if (on) setBootComplete(true);
+    };
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
+
+  const handleTubeAnimationEnd = (e) => {
+    if (e.animationName !== 'sidebar-tubelight-flicker') return;
+    if (replyActiveRef.current) return;
+    setBootComplete(true);
+  };
   const sortedChats = sortChatsByTime(chats);
   const chatsByDate = groupChatsByDate(sortedChats);
 
@@ -193,10 +256,16 @@ export function Sidebar({
     <>
       <aside className={`sidebar ${expanded ? 'sidebar--expanded' : ''}`} aria-label="Past chats">
         <div className="sidebar__top">
-          <span className="sidebar__brand" aria-label="Akira">
-            <span className="sidebar__brand-initial">A</span>
-            <span className="sidebar__brand-text">Akira</span>
-          </span>
+          <DesktopWindowControls />
+          <div className="sidebar__brand-wrap">
+            <span className="sidebar__brand" aria-label={`${BRAND_NAME}: ${BRAND_MEANING}`}>
+              <span className="sidebar__brand-initial">A</span>
+              <span className="sidebar__brand-text">{BRAND_NAME}</span>
+            </span>
+            {expanded && (
+              <p className="sidebar__brand-tagline">{BRAND_MEANING}</p>
+            )}
+          </div>
           <button
             type="button"
             className="sidebar__new"
@@ -250,22 +319,37 @@ export function Sidebar({
             </span>
           </button>
         </div>
-        <div className="sidebar__footer" aria-hidden>
-          <span className="sidebar__mood-emoji" aria-label="Current mood">{getCurrentThemeEmoji()}</span>
+        <div className="sidebar__footer">
           {expanded && (
-            <button
-              type="button"
-              className="sidebar__footer-settings"
-              onClick={() => onOpenSettings?.()}
-              aria-label="Settings"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z" />
-              </svg>
-              <span className="sidebar__footer-settings-text">Settings</span>
-            </button>
+            <div className="sidebar__footer-row">
+              <button
+                type="button"
+                className="sidebar__footer-settings"
+                onClick={() => onOpenSettings?.()}
+                aria-label="Settings"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+                </svg>
+                <span className="sidebar__footer-settings-text">Settings</span>
+              </button>
+            </div>
           )}
+          <span
+            className={`sidebar__brand-vertical${
+              tubeReplyActive
+                ? ' sidebar__brand-vertical--tubelight-reply'
+                : !bootComplete && !reducedMotion
+                  ? ' sidebar__brand-vertical--tubelight-boot'
+                  : ' sidebar__brand-vertical--tube-on'
+            }`}
+            style={tubeInlineStyle}
+            aria-hidden="true"
+            onAnimationEnd={handleTubeAnimationEnd}
+          >
+            AKIRA
+          </span>
         </div>
       </aside>
       {historyModal}

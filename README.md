@@ -1,6 +1,59 @@
 # Akira
 
-**Akira** is a full-stack conversational AI assistant platform that combines a pluggable large language model (LLM) backend with a modern chat interface, tool-augmented reasoning, and optional desktop packaging. It is designed for extensibility, multi-provider support, and a consistent user experience across web and native clients.
+**Akira** is a full-stack conversational AI assistant: a **FastAPI** backend with multi-provider LLMs, streaming tool use, and a **React + Vite** chat UI (optional **Electron** desktop). It is built for extensibility, provider switching, and a polished day-to-day chat experience—including markdown, diagrams, attachments, and voice.
+
+---
+
+## Resume-ready project summary
+
+Use the bullets below (tweak wording to first person) on a resume, LinkedIn, or portfolio. They reflect what the project implements end to end.
+
+### Product and scope
+
+- Owned an **AI chat product** from API design through UI: streaming conversations, multi-chat history, settings, branching, task planning, and optional voice and camera input.
+- Delivered a **multi-provider LLM layer** so one codebase talks to **OpenRouter** (many models, one HTTP API) and **Anthropic Claude via AWS Bedrock**, including streaming responses and **function calling / tool loops** across providers.
+
+### Backend (Python)
+
+- Built a **FastAPI** service with **REST + Server-Sent Events (SSE)** for low-latency token streaming, **heartbeat keepalives**, a **long stream timeout** (10 minutes), and **stop/cancel** behavior when the client aborts.
+- Implemented **Pydantic** request models with validation: max message length, image/file **count and size** limits, **UUID** `chat_id` enforcement, and safe **base64** handling for attachments.
+- Designed a **pluggable tool system**: Python modules under `backend/tools/` export `TOOL_DEF` + `call_tool`; tools are **discovered at runtime** and can be **reloaded without restarting** the server.
+- Ran tool handlers in a **bounded thread pool** with **configurable timeouts** (request-level, per-tool defaults, and optional per-invocation caps).
+- Persisted conversations to **JSON** with **cross-platform file locking** (Windows `msvcrt` / Unix `fcntl`) and **atomic writes** to avoid corrupted history under concurrent access.
+- Implemented **branch-from-message**: fork a chat at a given index with new user content and a new `chat_id`.
+- Added **in-memory rate limiting** on chat (e.g. requests per minute per IP or `X-User-ID`).
+- Built a **long-term memory** store (`akira_memory.json`) with **search** and lock-safe updates; **AGI mode** optionally **injects relevant memories** into the system prompt from the user’s latest message.
+- Implemented a **TaskManager** that asks the LLM for a **JSON task tree** (sequential / parallel / leaf tasks), then **executes** it asynchronously while **streaming progress** over SSE.
+- Hardened **file tools** with a **workspace root**, **path canonicalization**, **traversal checks**, **blocked paths** (e.g. `.git`, `node_modules`), and **atomic** text writes.
+- Loaded the assistant **system prompt from Markdown** on disk with an **in-code fallback**; merged an **authoritative list of enabled tools** into the prompt so capability answers stay consistent with what is actually exposed.
+- Injected **per-message timestamps** (`[Sent at: …]`) into content so the model can reason about timing across a long thread.
+- Added **autonomous mode** logic: when the user is idle, the backend can prompt the model for a **proactive thought or tool use** (with a **no-op** path when there is nothing useful to do).
+- Exposed **health** (`/api/health`) and **readiness** (`/api/ready`) checks; served **built static frontend** from the same process in production; exposed **secure filename-only** serving for **PNG screenshots** under `/api/screenshots/`.
+- Centralized **logging** and **environment-driven** defaults (temperature, token limits, thinking budget bounds, optional **AGI_MODE**, default provider).
+- Wrote **automated tests** around task tooling and **tool schema filtering** (e.g. ensuring API-facing tool definitions do not leak internal fields).
+
+### Frontend (React / JavaScript)
+
+- Implemented the chat app with **React 18**, **Vite 5**, **React Router**, **react-markdown** + **remark-gfm** for **GitHub-flavored markdown**.
+- Built **rich assistant rendering**: fenced **code blocks** with dedicated UI, **collapsible “thinking”** and **tool-use** sections (streaming-safe parsing), and **Mermaid** diagrams with **theme variables** tied to CSS custom properties.
+- Delivered **multi-image** and **generic file** attachments, wired to the same limits as the backend, for **vision** and text-file context.
+- Consumed SSE in the client with **`AbortController`** for **stop generation**, plus handlers for **meta**, **delta**, **settings**, **done**, and **error** events.
+- Created a **settings** surface: provider, **temperature**, **max tokens**, **extended thinking** toggle and **budget**, **per-tool toggles**, **stream vs buffer** mode, **autonomous mode**, and **light/dark appearance**—with **localStorage** persistence for user preferences.
+- Integrated **Web Speech API** for **dictation** and **text-to-speech** (voice conversation mode) where the browser supports it.
+- Added **camera capture** for attaching live photos to messages.
+- Used **audio feedback** when a response completes (optional UX polish).
+- Configured **vite-plugin-pwa** and **Workbox**: **web app manifest**, **service worker**, **offline shell**, and **runtime caching** for Google Fonts.
+- Set up a **dev proxy** from the Vite server to the API; supported **configurable API base URL** for packaged or alternate deployments (e.g. Electron).
+
+### Desktop and tooling
+
+- Packaged or documented an **Electron** app that **reuses the same React UI** and points at a configurable backend URL (see `desktop/README.md`).
+- Authored a **script** to **rank OpenRouter models** (with optional cached JSON output) to inform default model choices.
+
+### Architecture and API design
+
+- Treated the backend as the **single source of truth** for **tool definitions** and **provider capabilities**, while keeping the UI **stateless** aside from local preferences and appearance.
+- Used **SSE** instead of WebSockets for **simple, firewall-friendly** streaming with standard HTTP infrastructure.
 
 ---
 
@@ -8,16 +61,14 @@
 
 Akira provides:
 
-- **Multi-provider LLM integration** — Switch between **OpenRouter** (unified API for many models) and **Anthropic Claude** (via AWS Bedrock) without code changes. Configuration is environment-driven.
-- **Tool use (function calling)** — The assistant can invoke a curated set of tools (file I/O, web search, screenshots, system prompt editing, theme control, memory, and more) with streaming tool-call handling and configurable enable/disable per conversation.
-- **Streaming chat API** — Server-Sent Events (SSE) for low-latency token streaming, with heartbeat keepalives, configurable timeouts, and support for images and file attachments (including vision-capable models).
-- **Conversation history & branching** — Persisted chat history with branch-from-message support for exploring alternative reply paths.
-- **Task decomposition** — A dedicated task API that uses the LLM to break high-level goals into a tree of sequential/parallel subtasks and streams plan and execution progress.
-- **Customizable system prompt** — The assistant’s base behavior is defined in a Markdown file; the model can read and edit it via tools, enabling self-improvement and persona tuning.
-- **Theme & settings** — User-selectable UI themes (persisted via API), plus configurable temperature, max tokens, thinking budget, and tool toggles.
-- **Web and desktop** — React + Vite frontend for the browser; Electron wrapper for a desktop app that reuses the same UI and talks to the same backend.
-
-The backend is implemented in **Python** (FastAPI, Pydantic, async streaming); the frontend in **React** with Vite; optional **Electron** app for desktop. All APIs are REST/SSE and can be consumed by other clients.
+- **Multi-provider LLM integration** — Switch between **OpenRouter** and **Anthropic (Bedrock)** using environment and UI settings.
+- **Tool use (function calling)** — Curated tools under `backend/tools/`; streaming tool rounds; per-conversation enable/disable from the UI; authoritative tool list injected into the system prompt.
+- **Streaming chat API** — SSE with heartbeats and timeouts; images and file attachments for vision-capable models.
+- **Conversation history and branching** — JSON persistence with locking; branch from a message with new content.
+- **Task decomposition** — Task API streams a plan (task tree) and execution updates.
+- **Customizable system prompt** — Markdown file on the server; service APIs to read/write programmatically (`LLM_Service`); fallback prompt in code if the file is missing.
+- **Appearance and settings** — Light/dark UI (client-side, persisted locally); temperature, max tokens, thinking budget, tools, stream mode, autonomous mode via settings API + localStorage.
+- **Web and desktop** — React + Vite for the browser; PWA support; Electron option for desktop.
 
 ---
 
@@ -28,88 +79,85 @@ The backend is implemented in **Python** (FastAPI, Pydantic, async streaming); t
 │  Clients                                                        │
 │  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐ │
 │  │ Web (React)  │  │ Electron     │  │ Other API consumers    │ │
-│  │ localhost:   │  │ Desktop App  │  │ (curl, scripts, etc.)  │ │
-│  │ 5173         │  │              │  │                         │ │
+│  │ (Vite dev)   │  │ Desktop App  │  │ (curl, scripts, etc.)  │ │
 │  └──────┬───────┘  └──────┬───────┘  └────────────┬───────────┘ │
 └─────────┼──────────────────┼───────────────────────┼─────────────┘
           │                  │                       │
           ▼                  ▼                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  Backend (FastAPI) — http://localhost:8000                       │
-│  ┌─────────────────────────────────────────────────────────────┐
-│  │  API: /api/chat (SSE), /api/history, /api/task (SSE),         │
-│  │       /api/settings, /api/theme, /api/health, /api/ready     │
-│  └─────────────────────────────────────────────────────────────┘
+│  Backend (FastAPI) — default PORT from env (see Quick start)       │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  API: /api/chat (SSE), /api/history, /api/task (SSE),       │ │
+│  │       /api/settings, /api/health, /api/ready,               │ │
+│  │       /api/screenshots/{filename}                           │ │
+│  └─────────────────────────────────────────────────────────────┘ │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌──────────────────┐ │
-│  │ LLM Service     │  │ Task Manager    │  │ Tool discovery    │ │
-│  │ (streaming,     │  │ (plan + execute │  │ (backend/tools/*) │ │
-│  │  tool loops)    │  │  tree)          │  │                   │ │
-│  └────────┬────────┘  └────────┬────────┘  └─────────┬──────────┘ │
+│  │ LLM Service     │  │ Task Manager    │  │ Tool discovery   │ │
+│  │ (streaming,     │  │ (plan + execute │  │ (backend/tools)  │ │
+│  │  tool loops)    │  │  task tree)     │  │                  │ │
+│  └────────┬────────┘  └────────┬────────┘  └─────────┬────────┘ │
 │           │                     │                     │            │
 │  ┌────────▼─────────────────────▼─────────────────────▼──────────┐ │
 │  │  Providers: OpenRouter | Anthropic (Bedrock)                   │ │
-│  └───────────────────────────────────────────────────────────────┘ │
-│  Persistence: akira_history.json, theme_config.json, screenshots/   │
+│  └─────────────────────────────────────────────────────────────────┘ │
+│  Persistence: akira_history.json, akira_memory.json, screenshots/   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-- **Frontend** (`frontend/`): React 18, Vite 5, React Router, Markdown (GFM) rendering, Mermaid diagrams. Uses `/api` proxy in dev to the backend.
-- **Backend** (`backend/`): FastAPI app, CORS for dev origins and Electron, rate limiting on chat, static serving of built frontend and screenshots.
-- **Desktop** (`desktop/`): Electron loads the same React app (dev server or built `dist`), exposes API base URL via preload; backend must be running separately.
+- **Frontend** (`frontend/`): React 18, Vite 5, React Router, Markdown (GFM), Mermaid, PWA (Workbox). Dev server proxies `/api` to the backend.
+- **Backend** (`backend/`): FastAPI, CORS for local dev and Electron, rate limiting on chat, optional static serving of `frontend/dist`.
+- **Desktop** (`desktop/`): Electron loads the React app; backend runs separately.
 
 ---
 
-## Features in Detail
+## Features in detail
 
 ### LLM providers
 
-| Provider    | Description                    | Configuration (env) |
-|------------|--------------------------------|----------------------|
-| **OpenRouter** | Single API for many models; auto-ranked model list when `OPENROUTER_API_KEY` is set | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `DEFAULT_MODEL=openrouter`, etc. |
-| **Anthropic**  | Claude via AWS Bedrock         | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `BEDROCK_ENDPOINT`, `CLAUDE_INFERENCE_PROFILE` |
-
-Default provider is set via `DEFAULT_MODEL` (e.g. `openrouter` or `anthropic`). The frontend can switch provider in settings when the backend exposes `available_providers`.
+| Provider       | Description                    | Configuration (env) |
+|----------------|--------------------------------|----------------------|
+| **OpenRouter** | Unified API for many models    | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `DEFAULT_MODEL=openrouter`, etc. |
+| **Anthropic**  | Claude via AWS Bedrock         | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `BEDROCK_ENDPOINT` (optional), `CLAUDE_INFERENCE_PROFILE` |
 
 ### Tools (function calling)
 
-Tools are discovered from `backend/tools/`: each module defines `TOOL_DEF` (name, description, input_schema, optional default_enabled) and `call_tool(input, context)`. The LLM service builds provider-specific tool schemas and runs tool loops during streaming.
+Tools live in `backend/tools/`: each module defines `TOOL_DEF` (name, description, `input_schema`, optional `default_enabled`, optional `timeout_seconds`) and `call_tool(input, context)`. The LLM service maps them to provider-specific schemas and runs tool rounds during streaming.
 
-| Tool                 | Purpose |
-|----------------------|--------|
-| `read_file`         | Read file contents (optional line range). |
-| `write_file`        | Write or append to files; creates parent dirs. |
-| `patch_file`        | Apply patch-style edits. |
-| `execute_command`   | Run shell commands (use with care). |
-| `get_system_prompt` | Return current system prompt from `akira_system_prompt.md`. |
-| `edit_system_prompt`| Overwrite system prompt file (self-improvement). |
-| `reload_tools`      | Reload tool definitions from `backend/tools` without restart. |
-| `web_search`        | Web search (optional API key). |
-| `screenshot`        | Capture screen to `screenshots/`. |
-| `set_theme`         | Set UI theme (persisted). |
-| `adjust_llm_settings`| Change model/settings from within conversation. |
-| `store_memory` / `search_memories` / `list_memories` | Persistent memory store. |
+**Current modules** (as checked in from `backend/tools/`):
 
-Users can enable/disable tools per conversation via the settings UI; the backend injects the active tool list into the system prompt for that request.
+| Tool              | Purpose |
+|-------------------|--------|
+| `read_file`       | Read file contents under the workspace (optional line range). |
+| `write_file`      | Write or append; uses sandboxed paths and atomic writes. |
+| `patch_file`      | Apply patch-style edits. |
+| `list_dir`        | List directory entries under the workspace. |
+| `execute_command` | Run shell commands (use with care; environment-dependent). |
+| `web_search`      | Web search (optional API keys per implementation). |
+| `reload_tools`    | Reload tool definitions from disk without server restart. |
+| `store_memory`    | Append a long-term memory record. |
+| `search_memories` | Search stored memories by text. |
+| `list_memories`   | List stored memories. |
+
+Users enable or disable tools per conversation in the UI; only enabled tools are sent to the model and listed in the injected system prompt section.
 
 ### Chat API
 
-- **POST /api/chat** — Body: `message`, optional `chat_id`, `images[]`, `files[]`, `settings` (e.g. temperature, max_tokens, thinking_enabled, thinking_budget, enabled_tools, mood, stream). Response: SSE stream with events `meta`, `delta`, `settings`, `theme`, `done`, `error`. Supports vision (images) and file attachments; text files are inlined into the message.
-- **POST /api/chat/branch** — Branch a conversation at a given message index with new content; returns new `chat_id` and messages.
-- **GET /api/history** — List chats (metadata only).
+- **POST /api/chat** — Body: `message`, optional `chat_id`, `images[]`, `files[]`, `settings` (temperature, `max_tokens`, thinking flags, `enabled_tools`, `stream`, etc.). Response: SSE with events such as `meta`, `delta`, `settings`, `done`, `error` (and heartbeats). Text files can be inlined into the message on the server; images use vision-capable models when available.
+- **POST /api/chat/branch** — Branch at `message_index` with `new_content`; returns a new `chat_id`.
+- **GET /api/history** — List chats (metadata).
 - **GET /api/history/{chat_id}** — Full messages for one chat.
 - **DELETE /api/history/{chat_id}** — Delete a chat.
 
 ### Task API
 
-- **POST /api/task** — Body: `goal`. Streams SSE events: `plan` (task tree), `update` (per-node progress), `done` or `error`. The TaskManager uses the LLM to generate a structured task tree (sequential/parallel/atomic) and then executes nodes, feeding results back into context.
+- **POST /api/task** — Body: `goal`. Streams SSE: plan (task tree), per-node updates, `done` or `error`. The `TaskManager` uses the LLM to produce a structured tree (sequential / parallel / atomic) and executes it.
 
 ### Other endpoints
 
-- **GET /api/settings** — Default UI settings and bounds (tools, providers, token/temperature/thinking limits).
-- **GET /api/theme** — Current theme name for the frontend.
+- **GET /api/settings** — Defaults and bounds for the UI (tools list, providers, token/temperature/thinking limits, `agi_mode`, etc.).
 - **GET /api/health** — Liveness.
-- **GET /api/ready** — Readiness (history file + provider reachable).
-- **GET /api/screenshots/{filename}** — Serve screenshot images (e.g. after screenshot tool).
+- **GET /api/ready** — Readiness (history file usable + provider initialized).
+- **GET /api/screenshots/{filename}** — Serve a PNG from the project `screenshots/` directory (path-safe).
 
 ---
 
@@ -117,32 +165,30 @@ Users can enable/disable tools per conversation via the settings UI; the backend
 
 - **Python** 3.10+ (backend).
 - **Node.js** 18+ (frontend and desktop).
-- **API keys / credentials** for at least one LLM provider:
-  - **OpenRouter**: [OpenRouter](https://openrouter.ai) API key.
-  - **Anthropic (Bedrock)**: AWS credentials and Bedrock endpoint/profile.
+- **API keys / credentials** for at least one LLM provider (OpenRouter and/or AWS Bedrock for Anthropic).
 
 ---
 
 ## Quick start
 
-### 1. Clone and backend
+### 1. Clone and configure
 
 ```bash
 git clone <repository-url>
 cd Akira
 ```
 
-Create a `.env` in the project root (or backend) with the variables for your chosen provider, for example:
+Create a `.env` in the **project root** (loaded by `backend/main.py`):
 
 ```env
-# OpenRouter (default)
+# OpenRouter
 OPENROUTER_API_KEY=sk-or-...
 DEFAULT_MODEL=openrouter
 
-# Optional: override model, token limits, etc.
+# Optional
 # OPENROUTER_MODEL=anthropic/claude-sonnet-4
 # MAX_TOKENS=131072
-# DEFAULT_TEMPREATURE=0.7
+# DEFAULT_TEMPERATURE=0.7
 ```
 
 For Anthropic via Bedrock:
@@ -153,28 +199,32 @@ AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
 AWS_REGION=us-east-1
 CLAUDE_INFERENCE_PROFILE=anthropic.claude-3-5-sonnet-...
-# BEDROCK_ENDPOINT=...  # if using a custom endpoint
+# BEDROCK_ENDPOINT=...   # if using a custom endpoint
 ```
 
-Install backend dependencies and run the API (from project root):
+### 2. Backend
 
-```bash
-cd backend
-pip install -r requirements.txt
-# If requirements omit FastAPI/uvicorn, install: pip install fastapi uvicorn python-dotenv pydantic
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
-```
-
-Or from project root:
+Default HTTP port is **8002** (override with `PORT` in `.env`).
 
 ```bash
 pip install -r backend/requirements.txt
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+# Also install FastAPI stack if needed, e.g.:
+# pip install fastapi uvicorn python-dotenv pydantic
+cd <project-root>
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 8002
 ```
 
-### 2. Frontend (web)
+Ensure `frontend/vite.config.js` **`server.proxy['/api'].target`** matches your backend port (it is set to `http://localhost:8002` in the repo).
 
-In another terminal:
+**Telegram bot (optional):** With the API already running, set `TELEGRAM_BOT_TOKEN` in `.env`, optionally `TELEGRAM_ALLOWED_USER_IDS` (comma-separated numeric user IDs — strongly recommended), then from the project root:
+
+```bash
+python -m backend.telegram_bot
+```
+
+Messages are sent to `POST /api/chat`. Tools are **off** for Telegram by default; set `TELEGRAM_ENABLE_TOOLS=1` only if you accept tools executing on the machine that runs the API. Use `/new` in Telegram to start a new Akira thread.
+
+### 3. Frontend (web)
 
 ```bash
 cd frontend
@@ -182,11 +232,11 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173. The Vite dev server proxies `/api` to the backend.
+Open the URL Vite prints (often `http://localhost:5173`). The dev server proxies `/api` to the backend.
 
-### 3. Desktop (optional)
+### 4. Desktop (optional)
 
-Backend must be running. From `desktop/`:
+Backend must be running. See [desktop/README.md](desktop/README.md).
 
 ```bash
 cd desktop
@@ -194,34 +244,27 @@ npm install
 npm run dev
 ```
 
-This starts the frontend dev server and launches Electron. For production builds and installers, see [desktop/README.md](desktop/README.md).
-
 ---
 
 ## Configuration (environment)
 
-Backend behavior is driven by environment variables (e.g. from `.env` at project root). Commonly used:
-
 | Variable | Description | Example |
 |----------|-------------|--------|
+| `PORT` | Backend listen port | `8002` |
 | `DEFAULT_MODEL` | Default LLM provider | `openrouter`, `anthropic` |
 | `OPENROUTER_API_KEY` | OpenRouter API key | `sk-or-...` |
-| `OPENROUTER_MODEL` | Preferred OpenRouter model | `anthropic/claude-sonnet-4` |
+| `OPENROUTER_MODEL` | OpenRouter model id | `anthropic/claude-sonnet-4` |
 | `MAX_TOKENS` | Default max output tokens | `131072` |
-| `DEFAULT_TEMPREATURE` | Default sampling temperature | `0.7` |
-| `THINKING_BUDGET_MIN/MAX` | Bounds for extended thinking | e.g. `1024`, `128000` |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` | For Anthropic (Bedrock) | — |
-| `CLAUDE_INFERENCE_PROFILE` | Bedrock model ID | `anthropic.claude-3-5-sonnet-...` |
-| `BEDROCK_ENDPOINT` | Optional custom Bedrock endpoint | — |
+| `DEFAULT_TEMPERATURE` | Default sampling temperature | `0.7` |
+| `THINKING_BUDGET_MIN` / `THINKING_BUDGET_MAX` | Thinking token bounds | e.g. `1024`, `128000` |
+| `AGI_MODE` | When truthy, inject memory search into system prompt | `1` / `true` |
+| `AWS_*`, `CLAUDE_INFERENCE_PROFILE`, `BEDROCK_ENDPOINT` | Bedrock / Anthropic | — |
 
-Frontend:
+**Frontend:** `VITE_API_URL` — API base when not using the dev proxy. `VITE_BASE_PATH` — e.g. `./` for Electron file URLs.
 
-- `VITE_API_URL` — Override API base URL (default in dev is often empty and relies on proxy).
-- `VITE_BASE_PATH` — Base path for assets (e.g. `./` for Electron).
+**Desktop:** `AKIRA_API_URL` — Backend URL (often `http://localhost:8002`).
 
-Desktop:
-
-- `AKIRA_API_URL` — Backend URL (default `http://localhost:8000`).
+**Telegram bridge:** `TELEGRAM_BOT_TOKEN` (required to run the bot), `TELEGRAM_ALLOWED_USER_IDS` (optional allowlist), `AKIRA_API_BASE` (default `http://127.0.0.1:8002`), `TELEGRAM_ENABLE_TOOLS` (set to `1` to allow tools; default is off). On locked-down networks, `SSL: CERTIFICATE_VERIFY_FAILED` to Telegram is usually corporate TLS inspection: set `TELEGRAM_SSL_CA_BUNDLE` to a PEM file with your org CA, or as a last resort `TELEGRAM_VERIFY_SSL=0` (insecure). `REQUESTS_CA_BUNDLE` / `SSL_CERT_FILE` are used the same way if they point to a real file.
 
 ---
 
@@ -230,50 +273,52 @@ Desktop:
 ```
 Akira/
 ├── backend/
-│   ├── main.py              # FastAPI app, CORS, routes, static mount
+│   ├── main.py                 # FastAPI app, CORS, routes, static mount
 │   ├── akira_system_prompt.md
-│   ├── akira_history.json    # Persisted chats (created at runtime)
-│   ├── api/
-│   │   └── routers/         # chat, history, task
-│   ├── core/                 # logging, paths, rate_limit, history_store
+│   ├── akira_history.json    # Runtime (gitignored in normal setups)
+│   ├── akira_memory.json     # Long-term memories
+│   ├── api/routers/            # chat, history, task
+│   ├── core/                   # logging, paths, rate_limit, history_store, memory_store, file_access
 │   ├── services/
-│   │   ├── llm_service.py    # Orchestration, tool loop, history
-│   │   ├── llm_providers.py  # OpenRouter, Anthropic (Bedrock)
-│   │   ├── llm_tools.py      # Tool discovery, call_tool
-│   │   └── task_manager.py  # Plan generation, execution tree
-│   ├── tools/                # Tool modules (TOOL_DEF + call_tool)
-│   └── scripts/              # e.g. rank_openrouter_models.py
+│   │   ├── llm_service.py      # Orchestration, tool loop, history, autonomous hook
+│   │   ├── llm_providers.py   # OpenRouter, Anthropic (Bedrock)
+│   │   ├── llm_tools.py       # Discovery, timeouts, call_tool
+│   │   └── task_manager.py    # Plan + execute task tree
+│   ├── tools/                  # Tool modules (TOOL_DEF + call_tool)
+│   ├── telegram_bot.py         # Optional Telegram ↔ /api/chat bridge
+│   ├── tests/
+│   └── scripts/                # e.g. rank_openrouter_models.py
 ├── frontend/
 │   ├── src/
-│   │   ├── api/              # chat, history, settings client
-│   │   ├── components/       # ChatInput, MessageList, Sidebar, SettingsModal
-│   │   ├── config/           # theme
-│   │   ├── pages/            # ChatPage, etc.
-│   │   └── utils/
-│   ├── package.json
-│   └── vite.config.js
-├── desktop/                  # Electron wrapper (see desktop/README.md)
-├── .env                      # Not committed; copy from example if provided
-└── README.md                 # This file
+│   │   ├── api/                # chat, history, settings clients
+│   │   ├── components/         # ChatInput, MessageList, Sidebar, SettingsModal, MermaidChart, …
+│   │   ├── config/             # theme / appearance
+│   │   ├── pages/              # ChatPage, …
+│   │   └── utils/              # voice, sound, …
+│   ├── vite.config.js          # PWA + proxy
+│   └── package.json
+├── desktop/                    # Electron (see desktop/README.md)
+├── .env                        # Not committed
+└── README.md
 ```
 
 ---
 
 ## Development notes
 
-- **Adding a tool**: Add a new `.py` in `backend/tools/` with `TOOL_DEF` and `call_tool`; call the `reload_tools` tool or restart the backend to register it.
-- **System prompt**: Edit `backend/akira_system_prompt.md`; the assistant can also read/edit it via tools. Restart or next message picks up file changes.
-- **OpenRouter model ranking**: Run `backend/scripts/rank_openrouter_models.py` (with `OPENROUTER_API_KEY` set) to print a ranked list of models.
-- **Rate limiting**: Chat endpoint uses an in-memory rate limiter (e.g. 20 requests per minute per key); see `backend/core/rate_limit.py`.
+- **Adding a tool**: Add `backend/tools/<name>.py` with `TOOL_DEF` and `call_tool`; call the `reload_tools` tool or restart the backend.
+- **System prompt**: Edit `backend/akira_system_prompt.md` (or use `LLM_Service` read/write helpers in code). Keep tool names in the prompt aligned with actual tools in `backend/tools/`.
+- **OpenRouter model ranking**: Run `backend/scripts/rank_openrouter_models.py` with `OPENROUTER_API_KEY` set.
+- **Rate limiting**: `backend/core/rate_limit.py` — default 20 requests per minute per client key.
 
 ---
 
 ## License
 
-See repository license (e.g. MIT in desktop package.json). Use of third-party APIs (OpenRouter, Anthropic, AWS) is subject to their respective terms and pricing.
+See repository license (e.g. MIT in `desktop/package.json` if applicable). Use of third-party APIs (OpenRouter, Anthropic, AWS) is subject to their terms and pricing.
 
 ---
 
-## Summary
+## Short summary
 
-Akira is a modular, production-oriented conversational AI stack with multi-provider LLMs, rich tool use, streaming chat, task decomposition, and optional desktop packaging. Configure your preferred provider and API keys, run the backend and frontend (or desktop), and extend behavior via system prompt and pluggable tools in `backend/tools/`.
+Akira is a **modular full-stack AI assistant**: **FastAPI** + **SSE** streaming, **multi-provider** LLMs, **sandboxed tools** and **memory**, **task planning**, a **React** chat UI with **markdown**, **Mermaid**, **PWA**, and optional **voice**, **camera**, and **Electron**. Configure providers via `.env`, run the backend and frontend, and extend behavior with new tools under `backend/tools/`.

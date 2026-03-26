@@ -1,10 +1,8 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { THEME_LABELS, THEME_EMOJI, getCurrentThemeName, applyTheme } from '../config/theme';
+import { APPEARANCE_EMOJI, getCurrentAppearance, applyAppearance } from '../config/theme';
 
-const THEME_OPTIONS = Object.keys(THEME_LABELS).filter(
-  (key) => !['excited', 'default_light', 'default_dark', 'energetic', 'focus', 'cozy', 'midnight'].includes(key)
-);
+const APPEARANCE_OPTIONS = ['light', 'dark'];
 
 export function SettingsModal({ open, onClose, settings: initialSettings, onSettingsChange }) {
   const [temperature, setTemperature] = useState(
@@ -26,9 +24,7 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
   const [autonomousMode, setAutonomousMode] = useState(
     () => initialSettings?.autonomous_mode ?? false
   );
-  const [theme, setTheme] = useState(() => getCurrentThemeName() || 'neutral');
-  const [appearanceOpen, setAppearanceOpen] = useState(false);
-  const appearanceRef = useRef(null);
+  const [appearance, setAppearance] = useState(() => getCurrentAppearance() || 'light');
   const [tooltipActive, setTooltipActive] = useState(null);
   const [tooltipRect, setTooltipRect] = useState(null);
   const tooltipAnchorRef = useRef(null);
@@ -55,21 +51,9 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
     setEnabledTools(initialSettings?.enabled_tools ?? {});
     setStream(initialSettings?.stream ?? true);
     setAutonomousMode(initialSettings?.autonomous_mode ?? false);
-    setTheme(getCurrentThemeName() || 'neutral');
-    setAppearanceOpen(false);
+    setAppearance(getCurrentAppearance() || 'light');
     setTooltipActive(null);
   }, [open, initialSettings]);
-
-  useEffect(() => {
-    if (!appearanceOpen) return;
-    const handleClickOutside = (e) => {
-      if (appearanceRef.current && !appearanceRef.current.contains(e.target)) {
-        setAppearanceOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [appearanceOpen]);
 
   useEffect(() => {
     if (!open) return;
@@ -98,11 +82,14 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
       stream: Boolean(stream),
       autonomous_mode: Boolean(autonomousMode),
     });
-    applyTheme(theme, true);
+    applyAppearance(appearance, true);
     onClose();
   };
 
   if (!open) return null;
+
+  const effectiveAppearance = APPEARANCE_OPTIONS.includes(appearance) ? appearance : 'light';
+  const isDarkMode = effectiveAppearance === 'dark';
 
   const modal = createPortal(
     <div
@@ -118,9 +105,11 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
         aria-labelledby="settings-modal-title"
       >
         <header className="settings-modal__header">
-          <h2 id="settings-modal-title" className="settings-modal__title">
-            Settings
-          </h2>
+          <div className="settings-modal__title-block">
+            <h2 id="settings-modal-title" className="settings-modal__title">
+              Settings
+            </h2>
+          </div>
           <button
             type="button"
             className="settings-modal__close"
@@ -297,65 +286,49 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
             </ul>
           </section>
 
-          <section className="settings-modal__section" aria-labelledby="settings-theme-heading">
-            <h3 id="settings-theme-heading" className="settings-modal__section-title">
-              Theme
+          <section className="settings-modal__section" aria-labelledby="settings-appearance-heading">
+            <h3 id="settings-appearance-heading" className="settings-modal__section-title">
+              Appearance
             </h3>
-            <div className="settings-modal__field" ref={appearanceRef}>
-              <label id="settings-appearance-label" className="settings-modal__label">
-                Appearance
-              </label>
-              <div className="settings-modal__appearance">
-                <button
-                  type="button"
-                  className="settings-modal__appearance-trigger"
-                  onClick={() => setAppearanceOpen((o) => !o)}
-                  aria-haspopup="listbox"
-                  aria-expanded={appearanceOpen}
-                  aria-labelledby="settings-appearance-label"
-                  aria-describedby="settings-appearance-value"
+            <div className="settings-modal__field settings-modal__field--appearance">
+              <span id="settings-color-scheme-label" className="settings-modal__label">
+                Color scheme
+              </span>
+              <div
+                className="settings-modal__appearance-switch-row"
+                aria-labelledby="settings-color-scheme-label"
+              >
+                <span
+                  className={`settings-modal__appearance-side ${!isDarkMode ? 'settings-modal__appearance-side--active' : ''}`}
                 >
                   <span className="settings-modal__appearance-emoji" aria-hidden>
-                    {THEME_EMOJI[theme] ?? THEME_EMOJI.neutral ?? '✨'}
-                  </span>
-                  <span id="settings-appearance-value" className="settings-modal__appearance-label">
-                    {THEME_LABELS[theme] ?? THEME_LABELS.neutral ?? 'Neutral'}
-                  </span>
-                  <svg className="settings-modal__appearance-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                    <path d="m6 9 6 6 6-6" />
-                  </svg>
+                    {APPEARANCE_EMOJI.light}
+                  </span>{' '}
+                  Light
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={isDarkMode}
+                  aria-labelledby="settings-color-scheme-label"
+                  className={`settings-modal__toggle ${isDarkMode ? 'settings-modal__toggle--on' : ''}`}
+                  onClick={() =>
+                    setAppearance((prev) => {
+                      const cur = APPEARANCE_OPTIONS.includes(prev) ? prev : 'light';
+                      return cur === 'dark' ? 'light' : 'dark';
+                    })
+                  }
+                >
+                  <span className="settings-modal__toggle-thumb" />
                 </button>
-                {appearanceOpen && (
-                  <ul
-                    className="settings-modal__appearance-list"
-                    role="listbox"
-                    aria-labelledby="settings-appearance-label"
-                    tabIndex={-1}
-                  >
-                    {THEME_OPTIONS.map((key) => {
-                      const isSelected = (THEME_OPTIONS.includes(theme || '') ? theme : 'neutral') === key;
-                      return (
-                        <li key={key} role="option" aria-selected={isSelected}>
-                          <button
-                            type="button"
-                            className={`settings-modal__appearance-option ${isSelected ? 'settings-modal__appearance-option--selected' : ''}`}
-                            onClick={() => {
-                              setTheme(key);
-                              setAppearanceOpen(false);
-                            }}
-                          >
-                            <span className="settings-modal__appearance-emoji" aria-hidden>
-                              {THEME_EMOJI[key] ?? '✨'}
-                            </span>
-                            <span className="settings-modal__appearance-option-label">
-                              {THEME_LABELS[key] ?? key}
-                            </span>
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
+                <span
+                  className={`settings-modal__appearance-side ${isDarkMode ? 'settings-modal__appearance-side--active' : ''}`}
+                >
+                  <span className="settings-modal__appearance-emoji" aria-hidden>
+                    {APPEARANCE_EMOJI.dark}
+                  </span>{' '}
+                  Dark
+                </span>
               </div>
             </div>
           </section>

@@ -38,8 +38,22 @@ export const ChatInput = forwardRef(function ChatInput(
 
   const handleSubmit = (e) => {
     e?.preventDefault();
-    if (isStreaming && onStop) {
-      onStop();
+    if (isStreaming) {
+      const trimmed = value.trim();
+      const hasPayload =
+        Boolean(trimmed) || images.length > 0 || otherFiles.length > 0;
+      if (hasPayload) {
+        if (disabled) return;
+        onSend(trimmed, {
+          images: images.length ? images.map(({ data, media_type }) => ({ data, media_type })) : undefined,
+          files: otherFiles.length ? otherFiles.map(({ name, data, mime_type }) => ({ name, data, mime_type })) : undefined,
+        });
+        setValue('');
+        setImages([]);
+        setOtherFiles([]);
+        return;
+      }
+      if (onStop) onStop();
       return;
     }
     const trimmed = value.trim();
@@ -268,12 +282,19 @@ export const ChatInput = forwardRef(function ChatInput(
           <button
             type="button"
             onClick={handleSubmit}
-            className={`chat-input__send ${isStreaming ? 'chat-input__send--stop' : ''}`}
-            disabled={!isStreaming && (disabled || (!value.trim() && images.length === 0 && otherFiles.length === 0))}
-            aria-label={isStreaming ? 'Stop generating' : 'Send message'}
+            className={`chat-input__send ${isStreaming && !value.trim() && images.length === 0 && otherFiles.length === 0 ? 'chat-input__send--stop' : ''}`}
+            disabled={
+              !isStreaming &&
+              (disabled || (!value.trim() && images.length === 0 && otherFiles.length === 0))
+            }
+            aria-label={
+              isStreaming && !value.trim() && images.length === 0 && otherFiles.length === 0
+                ? 'Stop generating'
+                : 'Send message'
+            }
             aria-busy={disabled && !isStreaming}
           >
-            {isStreaming ? (
+            {isStreaming && !value.trim() && images.length === 0 && otherFiles.length === 0 ? (
               <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
                 <rect x="6" y="6" width="12" height="12" rx="1" />
               </svg>

@@ -1,6 +1,5 @@
 import logging
 from pathlib import Path
-from typing import Optional
 
 from backend.core.file_access import (
     atomic_write_bytes,
@@ -9,6 +8,8 @@ from backend.core.file_access import (
     is_write_allowed,
     resolve_path,
 )
+from backend.core.python_syntax import is_python_source_file
+from backend.core.source_syntax import is_syntax_checked_file, validate_source_syntax
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,22 @@ def call_tool(tool_input: dict, context=None):
     try:
         resolved.parent.mkdir(parents=True, exist_ok=True)
 
+        if mode == "text" and is_syntax_checked_file(resolved):
+            if append and resolved.exists():
+                try:
+                    to_check = resolved.read_text(encoding=encoding) + content
+                except UnicodeDecodeError as ude:
+                    return 200, {
+                        "success": False,
+                        "error": f"Cannot validate source: file is not valid {encoding}: {ude}",
+                        "path": path_str,
+                    }
+            else:
+                to_check = content
+            syn_err = validate_source_syntax(resolved, to_check)
+            if syn_err:
+                return 200, {"success": False, "error": syn_err, "path": path_str}
+
         if mode == "text":
             if append:
                 with open(resolved, "a", encoding=encoding) as f:
@@ -104,13 +121,18 @@ def call_tool(tool_input: dict, context=None):
 
         size = resolved.stat().st_size
         logger.info("Successfully wrote to file: %s", path_str)
-        return 200, {
+        out = {
             "success": True,
             "path": path_str,
             "size": size,
             "filename": resolved.name,
             "append": append,
         }
+        if mode == "text" and is_syntax_checked_file(resolved):
+            out["syntax_ok"] = True
+        if mode == "text" and is_python_source_file(resolved):
+            out["python_syntax_ok"] = True
+        return 200, out
     except Exception as e:
         logger.error("Error writing to file %s: %s", path_str, e, exc_info=True)
         return 200, {"success": False, "error": str(e), "path": path_str}

@@ -1,6 +1,6 @@
 /**
  * Voice conversation: speech-to-text (mic) and text-to-speech (Akira's reply).
- * Uses Web Speech API; works in desktop app when camera/mic permissions are granted.
+ * Uses Web Speech API; works in desktop app when mic permission is granted.
  */
 
 const SpeechRecognition =
@@ -36,7 +36,11 @@ export function startListening({ onResult, onInterim, onError, lang = '' }) {
 
   if (recognitionInstance) {
     try {
-      recognitionInstance.stop();
+      try {
+        recognitionInstance.abort();
+      } catch (_) {
+        recognitionInstance.stop();
+      }
     } catch (_) {}
     recognitionInstance = null;
   }
@@ -83,7 +87,11 @@ export function startListening({ onResult, onInterim, onError, lang = '' }) {
     stop: () => {
       try {
         if (recognitionInstance === recognition) {
-          recognition.stop();
+          try {
+            recognition.abort();
+          } catch (_) {
+            recognition.stop();
+          }
           recognitionInstance = null;
         }
       } catch (_) {}
@@ -97,7 +105,11 @@ export function startListening({ onResult, onInterim, onError, lang = '' }) {
 export function stopListening() {
   if (recognitionInstance) {
     try {
-      recognitionInstance.stop();
+      try {
+        recognitionInstance.abort();
+      } catch (_) {
+        recognitionInstance.stop();
+      }
     } catch (_) {}
     recognitionInstance = null;
   }
@@ -108,6 +120,11 @@ export function stopListening() {
  */
 export function isListening() {
   return Boolean(recognitionInstance);
+}
+
+/** True while the browser is playing TTS (including between chained utterances). */
+export function isSynthesizerSpeaking() {
+  return Boolean(speechSynthesis && speechSynthesis.speaking);
 }
 
 // Prefer female voice names (browser- and OS-dependent).
@@ -126,26 +143,103 @@ function getFemaleVoice() {
   return match || voices.find((v) => (v.name || '').toLowerCase().includes('female')) || voices[0];
 }
 
+/** Default TTS speed (1 = normal Web Speech baseline). Prior default 1.2, doubled. */
+const DEFAULT_SPEECH_RATE = 2.4;
+
+/** @type {Promise<void>} */
+let speakQueueTail = Promise.resolve();
+
+/** Bumped whenever queued speech should be abandoned (mic off, interrupt, new speak). */
+let speakEpoch = 0;
+
 /**
- * Speak text using the browser's speech synthesis. Returns a Promise that resolves when done.
- * Uses a female voice and slightly faster rate by default.
+ * Drop queued (not-yet-started) utterances and invalidate pending speakQueued chains.
+ * In-flight speech is unchanged until cancel/stopSpeaking.
+ */
+export function clearSpeakQueue() {
+  speakQueueTail = Promise.resolve();
+  speakEpoch += 1;
+}
+
+/**
+ * Resolves when all queued utterances have finished (including any in flight from the queue).
+ * @returns {Promise<void>}
+ */
+export function whenSpeakQueueIdle() {
+  return speakQueueTail;
+}
+
+/**
+ * One utterance without canceling the synthesis queue (for serialized streaming dictation).
  * @param {string} text
  * @param {{ rate?: number, pitch?: number, volume?: number, lang?: string }} options
  * @returns {Promise<void>}
  */
-export function speak(text, { rate = 1.2, pitch = 1, volume = 1, lang = '' } = {}) {
+function speakOneWithoutCancel(text, { rate = DEFAULT_SPEECH_RATE, pitch = 1, volume = 1, lang = '' } = {}) {
   return new Promise((resolve, reject) => {
     if (!speechSynthesis) {
       reject(new Error('Speech synthesis not supported'));
       return;
     }
-    const t = String(text || '').trim();
+    // Filter out hashtags (e.g., #example) from the text before speaking
+    const t = String(text || '').trim().replace(/#/g, '');
+    if (!t) {
+      resolve();
+      return;
+    }
+    const utterance = new SpeechSynthesisUtterance(t);
+    const voice = getFemaleVoice();
+    if (voice) utterance.voice = voice;
+    utterance.rate = rate;
+    utterance.pitch = pitch;
+    utterance.volume = volume;
+    if (lang) utterance.lang = lang;
+    utterance.onend = () => resolve();
+    utterance.onerror = () => resolve();
+    speechSynthesis.speak(utterance);
+  });
+}
+
+/**
+ * Enqueue text to speak after prior queued utterances complete. Does not cancel current speech.
+ * @param {string} text
+ * @param {{ rate?: number, pitch?: number, volume?: number, lang?: string }} options
+ * @returns {Promise<void>}
+ */
+export function speakQueued(text, options) {
+  const scheduledEpoch = speakEpoch;
+  const run = () => {
+    if (scheduledEpoch !== speakEpoch) return Promise.resolve();
+    return speakOneWithoutCancel(text, options);
+  };
+  const p = speakQueueTail.then(run, run);
+  speakQueueTail = p.catch(() => {});
+  return p;
+}
+
+/**
+ * Speak text using the browser's speech synthesis. Returns a Promise that resolves when done.
+ * Uses a female voice and a faster default rate (~2× the prior default).
+ * Clears any speak queue first.
+ * @param {string} text
+ * @param {{ rate?: number, pitch?: number, volume?: number, lang?: string }} options
+ * @returns {Promise<void>}
+ */
+export function speak(text, { rate = DEFAULT_SPEECH_RATE, pitch = 1, volume = 1, lang = '' } = {}) {
+  return new Promise((resolve, reject) => {
+    if (!speechSynthesis) {
+      reject(new Error('Speech synthesis not supported'));
+      return;
+    }
+    // Filter out hashtags (e.g., #example) from the text before speaking
+    const t = String(text || '').trim().replace(/#/g, '');
     if (!t) {
       resolve();
       return;
     }
 
-    speechSynthesis.cancel();
+    clearSpeakQueue();
+    if (speechSynthesis) speechSynthesis.cancel();
 
     const utterance = new SpeechSynthesisUtterance(t);
     const voice = getFemaleVoice();
@@ -162,8 +256,9 @@ export function speak(text, { rate = 1.2, pitch = 1, volume = 1, lang = '' } = {
 }
 
 /**
- * Stop any current speech.
+ * Stop any current speech and clear queued streaming utterances.
  */
 export function stopSpeaking() {
+  clearSpeakQueue();
   if (speechSynthesis) speechSynthesis.cancel();
 }

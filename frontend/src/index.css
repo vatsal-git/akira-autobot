@@ -22,12 +22,14 @@
   --color-bubble-user: #fff;
   --color-highlight: #E0FF4F;
   --color-secondary: #048BA8;
-  --color-send-btn: #BA274A;
-  --color-send-btn-hover: #9e1f3e;
-  --color-primary: #BA274A;
-  --color-primary-hover: #9e1f3e;
+  --color-send-btn: #dc2438;
+  --color-send-btn-hover: #b81428;
+  --color-primary: #dc2438;
+  --color-primary-hover: #b81428;
   --color-error: #b91c1c;
   --color-error-bg: #fef2f2;
+  /* Product accent — stays consistent in light/dark for wordmarks and marks */
+  --color-brand: #dc2438;
   --focus-ring: 2px solid var(--color-primary);
   --radius: 8px;
   --radius-lg: 12px;
@@ -48,7 +50,7 @@
   --glass-blur: 14px;
 }
 
-/* Theme is controlled by theme config (see frontend/src/config/theme.js). Use set_theme tool or presets. */
+/* Colors: light/dark in theme config (frontend/src/config/theme.js). */
 
 * {
   box-sizing: border-box;
@@ -77,4 +79,27 @@ textarea:focus-visible,
 a:focus-visible {
   outline: var(--focus-ring);
   outline-offset: 2px;
+}
+
+/* Electron overlay shell: desktop shows through */
+html.akira-desktop-overlay,
+html.akira-desktop-overlay body {
+  background: transparent;
+}
+
+html.akira-desktop-overlay #root {
+  background: transparent;
+}
+
+html.akira-desktop-overlay .chat-page {
+  background: rgba(234, 225, 223, 0.88);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-modal);
+}
+
+html.akira-desktop-overlay[data-appearance='dark'] .chat-page {
+  background: rgba(26, 26, 26, 0.88);
 }

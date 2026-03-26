@@ -1,13 +1,13 @@
 import { apiFetch, getApiBase } from './client.js';
 
 /**
- * Send a message and consume the SSE stream. Calls onMeta, onDelta, onSettings, onTheme, onDone, onError.
+ * Send a message and consume the SSE stream. Calls onMeta, onDelta, onSettings, onDone, onError.
  * Pass signal from an AbortController to support cancelling (stop generating).
- * @param {{ message: string, chat_id?: string, images?: Array<{data: string, media_type: string}>, files?: Array<{name: string, data: string, mime_type: string}>, settings?: object }} body
- * @param {{ signal?: AbortSignal, onMeta: (data: { chat_id: string }) => void, onDelta: (delta: string) => void, onSettings?: (data: { temperature?: number, max_tokens?: number }) => void, onTheme?: (data: { theme: string }) => void, onDone: (data: { chat_id: string }) => void, onError: (data: { error: string, code?: string }) => void }} callbacks
+ * @param {{ message: string, chat_id?: string, images?: Array<{data: string, media_type: string}>, files?: Array<{name: string, data: string, mime_type: string}>, settings?: object, error_recovery?: boolean }} body
+ * @param {{ signal?: AbortSignal, onMeta: (data: { chat_id: string }) => void, onDelta: (delta: string) => void, onSettings?: (data: { temperature?: number, max_tokens?: number }) => void, onDone: (data: { chat_id: string }) => void, onError: (data: { error: string, code?: string }) => void }} callbacks
  * @returns {Promise<void>}
  */
-export async function sendMessage(body, { signal, onMeta, onDelta, onSettings, onTheme, onDone, onError }) {
+export async function sendMessage(body, { signal, onMeta, onDelta, onSettings, onDone, onError }) {
   const base = getApiBase();
   const chatUrl = base ? `${base.replace(/\/$/, '')}/api/chat` : '/api/chat';
   const res = await fetch(chatUrl, {
@@ -53,7 +53,6 @@ export async function sendMessage(body, { signal, onMeta, onDelta, onSettings, o
           if (event === 'meta') onMeta(data);
           else if (event === 'delta') onDelta(data.delta ?? '');
           else if (event === 'settings' && onSettings) onSettings(data);
-          else if (event === 'theme' && onTheme) onTheme(data);
           else if (event === 'done') onDone(data);
           else if (event === 'error') onError(data);
         } catch (e) {

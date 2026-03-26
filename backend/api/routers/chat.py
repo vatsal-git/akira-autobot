@@ -72,6 +72,8 @@ class ChatRequest(BaseModel):
     images: Optional[List[ImageBlock]] = None
     files: Optional[List[FileBlock]] = None
     settings: Optional[Dict[str, Any]] = None
+    # When True, the message describes a failed assistant reply; prepend recovery instructions for the model.
+    error_recovery: Optional[bool] = False
 
     @field_validator("message")
     @classmethod
@@ -125,7 +127,6 @@ async def _chat_event_stream(
     thinking_enabled: bool,
     thinking_budget: int,
     enabled_tools_map: Optional[Dict[str, bool]],
-    mood: Optional[str] = None,
     stream: bool = True,
     tool_timeout_seconds: Optional[float] = None,
 ):
@@ -146,7 +147,6 @@ async def _chat_event_stream(
             thinking_enabled=thinking_enabled,
             thinking_budget=thinking_budget,
             enabled_tools_map=enabled_tools_map,
-            mood=mood,
             tool_timeout_seconds=tool_timeout_seconds,
         )
         stream_anext = stream_gen.__anext__
@@ -175,9 +175,6 @@ async def _chat_event_stream(
                 if isinstance(chunk, dict) and chunk.get("type") == "settings":
                     payload = {k: v for k, v in chunk.items() if k != "type"}
                     yield f"event: settings\ndata: {json.dumps(payload)}\n\n"
-                elif isinstance(chunk, dict) and chunk.get("type") == "theme":
-                    payload = {k: v for k, v in chunk.items() if k != "type"}
-                    yield f"event: theme\ndata: {json.dumps(payload)}\n\n"
                 else:
                     full_response += chunk
             # Single delta with full response
@@ -208,9 +205,6 @@ async def _chat_event_stream(
                 if isinstance(chunk, dict) and chunk.get("type") == "settings":
                     payload = {k: v for k, v in chunk.items() if k != "type"}
                     yield f"event: settings\ndata: {json.dumps(payload)}\n\n"
-                elif isinstance(chunk, dict) and chunk.get("type") == "theme":
-                    payload = {k: v for k, v in chunk.items() if k != "type"}
-                    yield f"event: theme\ndata: {json.dumps(payload)}\n\n"
                 else:
                     full_response += chunk
                     yield f"event: delta\ndata: {json.dumps({'delta': chunk})}\n\n"
@@ -288,7 +282,6 @@ async def chat_stream(body: ChatRequest, request: Request):
     temperature = settings.get("temperature", 0.7)
     thinking_enabled = settings.get("thinking_enabled", True)
     thinking_budget = settings.get("thinking_budget", 16000)
-    mood = settings.get("mood")  # Agent's current mood; injected into system prompt at send time
     stream = settings.get("stream", True)  # When False, buffer full response then send one delta
     # Max seconds per tool execution; if exceeded, tool call returns 408. Omit or 0 = no timeout.
     tool_timeout_seconds = settings.get("tool_timeout_seconds")
@@ -325,6 +318,16 @@ async def chat_stream(body: ChatRequest, request: Request):
     else:
         user_content = message
 
+    if body.error_recovery:
+        user_content = (
+            "[Akira error recovery — a previous assistant reply failed to complete. "
+            "Use the error details below and the conversation history. "
+            "Briefly explain what likely went wrong and what the user should try next. "
+            "If a concrete fix exists (settings, retry, smaller request), say so. "
+            "Be concise and helpful.]\n\n"
+            + user_content
+        )
+
     history_messages = []
     if body.chat_id:
         all_history = llm.load_history()
@@ -351,7 +354,6 @@ async def chat_stream(body: ChatRequest, request: Request):
             thinking_enabled=thinking_enabled,
             thinking_budget=thinking_budget,
             enabled_tools_map=enabled_tools_map,
-            mood=mood,
             stream=stream,
             tool_timeout_seconds=tool_timeout_seconds,
         ),

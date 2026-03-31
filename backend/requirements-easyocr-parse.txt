@@ -1,0 +1,5 @@
+# Minimal deps for desktop_ui_parse action get_ui_elements with default parse_backend easyocr.
+# pip install -r backend/requirements-easyocr-parse.txt
+# Torch and OpenCV are usually already installed from backend/requirements.txt
+
+easyocr>=1.7.0

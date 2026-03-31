@@ -51,6 +51,25 @@ export function getMessageText(content) {
   return stripSentAtSuffix(String(content));
 }
 
+/** Same delimiter as ChatPage `assistantContentAfterStreamError` — partial before, API error after. */
+const ASSISTANT_STREAM_ERROR_MARK = /\n\n---\n\n\*\*Something went wrong:\*\*\s*/;
+
+/**
+ * @param {string|unknown} raw — full assistant message text (string or block-shaped content)
+ * @returns {{ partial: string, errorDetail: string }}
+ */
+export function splitAssistantStreamErrorContent(raw) {
+  const text = typeof raw === 'string' ? stripSentAtSuffix(raw) : getMessageText(raw);
+  if (!text || typeof text !== 'string') return { partial: '', errorDetail: '' };
+  const parts = text.split(ASSISTANT_STREAM_ERROR_MARK);
+  if (parts.length < 2) {
+    return { partial: '', errorDetail: text.trim() };
+  }
+  const errorDetail = (parts.pop() || '').trim();
+  const partial = parts.join('\n\n---\n\n**Something went wrong:**\n\n').trim();
+  return { partial, errorDetail };
+}
+
 const THINKING_BLOCK_REGEX = /<details[^>]*>\s*<summary[^>]*>([\s\S]*?)<\/summary>\s*([\s\S]*?)<\/details>/i;
 
 /**
@@ -153,6 +172,46 @@ function parseAssistantContent(content) {
   }
 
   return { main: stripSentAtSuffix(main.trim()), thinking, thinkingStreaming, toolStreaming };
+}
+
+function firstNonEmptyLine(text) {
+  if (!text || typeof text !== 'string') return '';
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    const t = line.trim();
+    if (t) return t;
+  }
+  return '';
+}
+
+/**
+ * Single-line label for the chat header: first line of the first assistant reply, or "New Chat".
+ * @param {Array<{ role: string, content?: unknown, error?: boolean }>} messages
+ * @returns {string}
+ */
+export function getChatTitleFromMessages(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return 'New Chat';
+  const assistant = messages.find((m) => m && m.role === 'assistant');
+  if (!assistant) return 'New Chat';
+  let raw;
+  if (assistant.error) {
+    const split = splitAssistantStreamErrorContent(assistant.content);
+    raw = (split.partial || '').trim() ? split.partial : split.errorDetail;
+  } else {
+    const parsed = parseAssistantContent(assistant.content);
+    raw = parsed.main || '';
+  }
+  raw = stripSentAtSuffix(raw);
+  const line = firstNonEmptyLine(raw);
+  if (!line) return 'New Chat';
+  let display = line
+    .replace(/^#{1,6}\s+/, '')
+    .replace(/^\*\s+/, '')
+    .replace(/^>\s*/, '')
+    .trim();
+  display = display.replace(/\s+/g, ' ');
+  if (!display) return 'New Chat';
+  return display;
 }
 
 /**
@@ -419,30 +478,30 @@ export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerate
         const isError = isAssistant && msg.error;
         const isLast = i === messages.length - 1;
         const showCursor = isAssistant && isLast && isStreaming && !isError;
-        const parsed = isAssistant && !isError ? parseAssistantContent(msg.content) : null;
-        let text = isError ? getMessageText(msg.content) : (isAssistant ? (parsed.main) : getMessageText(msg.content));
+        let parsed = null;
+        let streamErrorDetail = null;
+        if (isAssistant) {
+          if (isError) {
+            const split = splitAssistantStreamErrorContent(msg.content);
+            streamErrorDetail = split.errorDetail;
+            parsed = parseAssistantContent(split.partial || '');
+          } else {
+            parsed = parseAssistantContent(msg.content);
+          }
+        }
+        let text = isAssistant ? (parsed?.main ?? '') : getMessageText(msg.content);
         text = stripSentAtSuffix(text);
-        const thinking = isAssistant && !isError ? parsed?.thinking : null;
-        const thinkingStreaming = isAssistant && !isError ? parsed?.thinkingStreaming : null;
-        const toolStreaming = isAssistant && !isError ? parsed?.toolStreaming : null;
+        const thinking = isAssistant ? parsed?.thinking : null;
+        const thinkingStreaming = isAssistant ? parsed?.thinkingStreaming : null;
+        const toolStreaming = isAssistant ? parsed?.toolStreaming : null;
         return (
           <li
             key={i}
-            className={`message message--${msg.role}${isError ? ' message--error' : ''}`}
+            className={`message message--${msg.role}`}
             data-role={msg.role}
           >
             <div className="message__bubble">
               <div className="message__body">
-                {isError && (
-                  <div className="message__error" role="alert">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                      <circle cx="12" cy="12" r="10" />
-                      <line x1="12" y1="8" x2="12" y2="12" />
-                      <line x1="12" y1="16" x2="12.01" y2="16" />
-                    </svg>
-                    <span>{text}</span>
-                  </div>
-                )}
                 {!isAssistant && msg.images?.length > 0 && (
                   <div className="message__images" aria-label="Attached images">
                     {msg.images.map((img, j) => {
@@ -460,7 +519,7 @@ export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerate
                     })}
                   </div>
                 )}
-                {!isError && thinking && (
+                {thinking && (
                   <details className="message-thinking" data-thinking>
                     <summary className="message-thinking__summary">
                       {thinking.summary}
@@ -474,7 +533,7 @@ export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerate
                     </div>
                   </details>
                 )}
-                {!isError && thinkingStreaming != null && (
+                {thinkingStreaming != null && (
                   <details className="message-thinking message-thinking--streaming" data-thinking open>
                     <summary className="message-thinking__summary">Thinking</summary>
                     <div className="message-thinking__body">
@@ -486,7 +545,7 @@ export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerate
                     </div>
                   </details>
                 )}
-                {!isError && toolStreaming != null && (
+                {toolStreaming != null && (
                   <details className="message-thinking message-thinking--streaming" data-tool-use open>
                     <summary className="message-thinking__summary">{toolStreaming.summary}</summary>
                     <div className="message-thinking__body">
@@ -498,7 +557,7 @@ export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerate
                     </div>
                   </details>
                 )}
-                {!isError && text && (
+                {text && (
                   <div className="message__main">
                     {splitToolDetails(text).map((part, j) => {
                       if (part.type === 'text') {
@@ -552,6 +611,19 @@ export function MessageList({ messages, isStreaming, onCopyMessage, onRegenerate
                         <span key={j} className="message-thinking">{part.content}</span>
                       );
                     })}
+                  </div>
+                )}
+                {isError && (
+                  <div className="message__error" role="alert">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="8" x2="12" y2="12" />
+                      <line x1="12" y1="16" x2="12.01" y2="16" />
+                    </svg>
+                    <span className="message__error-body">
+                      <strong>Something went wrong:</strong>{' '}
+                      {streamErrorDetail || 'Try again.'}
+                    </span>
                   </div>
                 )}
                 {showCursor && <span className="message__cursor" aria-hidden />}

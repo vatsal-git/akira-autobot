@@ -4,6 +4,31 @@ from typing import Any, Dict, Optional
 
 from backend.tools import discover_tools
 
+# If client settings still use legacy key desktop_control, map it to the split tools.
+_DESKTOP_SPLIT_FROM_LEGACY = (
+    "desktop_mouse",
+    "desktop_keyboard",
+    "desktop_screen_query",
+    "desktop_ui_parse",
+    "desktop_wait",
+)
+
+
+def _expand_legacy_desktop_control_enabled_map(
+    enabled_tools_map,
+):
+    if not enabled_tools_map or not isinstance(enabled_tools_map, dict):
+        return enabled_tools_map
+    if "desktop_control" not in enabled_tools_map:
+        return enabled_tools_map
+    m = dict(enabled_tools_map)
+    legacy_val = m.pop("desktop_control")
+    if isinstance(legacy_val, bool):
+        for name in _DESKTOP_SPLIT_FROM_LEGACY:
+            m.setdefault(name, legacy_val)
+    return m
+
+
 # Single shared executor for running tool handlers with timeout (bounded pool to avoid unbounded threads)
 _TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=32, thread_name_prefix="tool_")
 
@@ -17,7 +42,7 @@ class LLM_Tools:
         self.logger.info("Initializing LLM Tools: %s tools loaded", len(self.tools_def))
 
     def _reload_tools(self):
-        """Load or reload tool definitions and handlers from backend/tools folder."""
+        """Load or reload tool definitions and handlers from backend/tools (recursive)."""
         self.tools_def, self._tool_handlers = discover_tools()
         self.tools_name_list = [t["name"] for t in self.tools_def]
 
@@ -102,6 +127,7 @@ class LLM_Tools:
                                When provided, only tools set to True are returned.
                                When None, all tools are returned.
         """
+        enabled_tools_map = _expand_legacy_desktop_control_enabled_map(enabled_tools_map)
         api_keys = ["name", "description", "input_schema"]
         if enabled_tools_map:
             return [

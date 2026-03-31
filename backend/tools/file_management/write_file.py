@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 TOOL_DEF = {
     "name": "write_file",
-    "description": "Write content to a file. Use relative paths from the project root (e.g. backend/tools/read_file.py). Paths are canonicalized and must stay inside the project. Overwrites are done atomically (tmp then replace). Overwrites by default; set append to true to add at the end. Parent directories are created if missing. Read the file first when editing so you don't overwrite blindly. Writes to .git/ and node_modules/ are blocked.",
+    "description": "Write content to a file. Use relative paths from the project root (e.g. backend/tools/file_management/read_file.py). Paths are canonicalized and must stay inside the project. Overwrites are done atomically (tmp then replace). Overwrites by default; set append to true to add at the end. Parent directories are created if missing. Read the file first when editing so you don't overwrite blindly. Writes to .git/ and node_modules/ are blocked.",
     "input_schema": {
         "type": "object",
         "properties": {

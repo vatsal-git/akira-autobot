@@ -49,8 +49,17 @@ def history_lock(file_path: str):
 def load_history(file_path: str) -> Dict[str, Any]:
     """Load history from file. Caller should hold history_lock if doing read-modify-write."""
     if os.path.exists(file_path):
-        with open(file_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except json.JSONDecodeError as e:
+            logger.error(
+                "History file is not valid JSON (fix or rename %s): %s", file_path, e
+            )
+            return {}
+        except OSError as e:
+            logger.error("Could not read history file %s: %s", file_path, e)
+            return {}
     return {}
 
 

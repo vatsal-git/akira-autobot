@@ -22,14 +22,15 @@
   --color-bubble-user: #fff;
   --color-highlight: #E0FF4F;
   --color-secondary: #048BA8;
-  --color-send-btn: #dc2438;
-  --color-send-btn-hover: #b81428;
-  --color-primary: #dc2438;
-  --color-primary-hover: #b81428;
+  --color-send-btn: #1a1a1a;
+  --color-send-btn-hover: #000000;
+  --color-primary: #1a1a1a;
+  --color-primary-hover: #000000;
   --color-error: #b91c1c;
   --color-error-bg: #fef2f2;
-  /* Product accent — stays consistent in light/dark for wordmarks and marks */
-  --color-brand: #dc2438;
+  /* Accent: black (light) / white (dark) — set with theme in theme.js */
+  --color-brand: #1a1a1a;
+  --color-on-primary: #ffffff;
   --focus-ring: 2px solid var(--color-primary);
   --radius: 8px;
   --radius-lg: 12px;
@@ -48,6 +49,13 @@
   --glass-bg: 70%;
   --glass-border: 55%;
   --glass-blur: 14px;
+  /* Sidebar + main column: tint strength vs transparent (backdrop blur still applies) */
+  --glass-panel-sidebar: 56%;
+  --glass-panel-main: 52%;
+  /* Darker glass: user bubbles + composer (tint opacity vs transparent) */
+  --glass-user-bubble-mix: 44%;
+  /* Composer pill: higher = more opaque (reads darker vs strip) */
+  --glass-input-bar-mix: 78%;
 }
 
 /* Colors: light/dark in theme config (frontend/src/config/theme.js). */
@@ -92,7 +100,8 @@ html.akira-desktop-overlay #root {
 }
 
 html.akira-desktop-overlay .chat-page {
-  background: rgba(234, 225, 223, 0.88);
+  /* Softer shell so inner glass panels (sidebar, main) stay readable */
+  background: rgba(234, 225, 223, 0.48);
   backdrop-filter: blur(var(--glass-blur));
   -webkit-backdrop-filter: blur(var(--glass-blur));
   border-radius: var(--radius-lg);
@@ -101,5 +110,16 @@ html.akira-desktop-overlay .chat-page {
 }
 
 html.akira-desktop-overlay[data-appearance='dark'] .chat-page {
-  background: rgba(26, 26, 26, 0.88);
+  background: rgba(26, 26, 26, 0.48);
+}
+
+html.akira-desktop-overlay[data-chat-bg-image='1'] .chat-page {
+  background-color: transparent;
+  background-image: var(--chat-bg-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  /* Image stays sharp; glass is on sidebar / main, not the shell */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }

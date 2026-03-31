@@ -43,9 +43,12 @@ typing-inspection==0.4.2
 typing_extensions==4.15.0
 urllib3==2.6.3
 uvicorn==0.42.0
+litellm>=1.55.0,<2
+PyYAML>=6.0.1
 webencodings==0.5.1
 
 flash_attn==2.5.8
 torch==2.3.1
 accelerate==0.31.0
 transformers==4.41.2
+huggingface-hub>=0.23.0,<1.0

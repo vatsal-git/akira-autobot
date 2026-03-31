@@ -1,0 +1,18 @@
+# Optional: OmniParser v2 for desktop_ui_parse get_ui_elements when parse_backend is omniparser (or auto + AKIRA_OMNIPARSER_DIR).
+# Default get_ui_elements uses EasyOCR only: pip install -r backend/requirements-easyocr-parse.txt
+# pip install -r backend/requirements-omniparser.txt
+# Code: clone https://github.com/microsoft/OmniParser (default path <Akira>/OmniParser) or set AKIRA_OMNIPARSER_REPO.
+# Weights (all local; no Hub from Akira): AKIRA_OMNIPARSER_DIR = OmniParser v2 (icon_detect/model.pt, icon_caption/).
+# Also need microsoft/Florence-2-base on disk: AKIRA_FLORENCE_BASE_DIR or AKIRA_OMNIPARSER_DIR/Florence-2-base (copy from another machine).
+# License: verify https://github.com/microsoft/OmniParser and the HF model card before production use.
+
+# microsoft/OmniParser util/utils.py imports PaddleOCR at module load (even when OCR uses EasyOCR only).
+paddlepaddle
+paddleocr
+
+easyocr>=1.7.0
+# Must stay <1.0 while the main stack pins transformers==4.41.2 (that release requires huggingface-hub<1.0).
+huggingface-hub>=0.23.0,<1.0
+supervision>=0.18.0
+torchvision>=0.15.0
+ultralytics>=8.0.0

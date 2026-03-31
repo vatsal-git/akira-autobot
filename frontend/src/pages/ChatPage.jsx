@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { MessageList, getMessageText } from '../components/MessageList';
+import { MessageList, getMessageText, getChatTitleFromMessages } from '../components/MessageList';
 import ChatInput from '../components/ChatInput';
 import { Sidebar } from '../components/Sidebar';
 import { SettingsModal } from '../components/SettingsModal';
@@ -38,6 +38,7 @@ function loadStoredSettings() {
       enabled_tools: data.enabled_tools,
       stream: data.stream,
       autonomous_mode: data.autonomous_mode,
+      current_model: data.current_model,
     };
   } catch {
     return null;
@@ -54,6 +55,7 @@ function saveStoredSettings(settings) {
       enabled_tools: settings.enabled_tools,
       stream: settings.stream,
       autonomous_mode: settings.autonomous_mode,
+      current_model: settings.current_model,
     };
     localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(toStore));
   } catch (_) {}
@@ -67,10 +69,18 @@ const DEFAULT_SETTINGS = {
   enabled_tools: null,
   tools: [],
   current_model: 'anthropic',
-  available_providers: ['anthropic'],
+  available_models: [],
   stream: true, // When true, response streams in; when false, buffered and shown at once
   autonomous_mode: false,
 };
+
+/** Keep partial streamed reply visible and append the API error (used for display + recovery snapshot). */
+function assistantContentAfterStreamError(partialText, errorText) {
+  const err = (errorText || '').trim() || 'Something went wrong. Try again.';
+  const partial = (partialText || '').trim();
+  if (!partial) return err;
+  return `${partial}\n\n---\n\n**Something went wrong:** ${err}`;
+}
 
 export default function ChatPage() {
   const { chatId: urlChatId } = useParams();
@@ -96,13 +106,13 @@ export default function ChatPage() {
   const pendingUserMessageRef = useRef(null);
   const performSendRef = useRef(null);
   const abortedRef = useRef(false);
-  /** Snapshot of messages (including failed assistant bubble) before clearing UI for recovery */
+  /** Snapshot of messages (including failed assistant bubble) while a follow-up error-recovery request runs */
   const preRecoveryMessagesRef = useRef(null);
   const recoveryInProgressRef = useRef(false);
   const chatIdRef = useRef(null);
   const [canScrollDown, setCanScrollDown] = useState(false);
   const [showCopyFeedback, setShowCopyFeedback] = useState(false);
-  /** True while the UI is cleared and a follow-up error-recovery request runs */
+  /** True while a follow-up error-recovery request runs */
   const [isDiagnosingError, setIsDiagnosingError] = useState(false);
   // Voice conversation: speak to Akira, hear reply
   const voiceSupport = useBrowserVoice();
@@ -369,6 +379,7 @@ export default function ChatPage() {
           thinking_budget: settings.thinking_budget,
           enabled_tools: settings.enabled_tools ?? undefined,
           stream: settings.stream,
+          model: settings.current_model,
         },
       },
       {
@@ -426,7 +437,7 @@ export default function ChatPage() {
               });
           }
           
-          if (base && base.length) {
+          if (base?.length) {
             const lastIdx = base.length - 1;
             const newMessages = [...base];
             if (newMessages[lastIdx]?.role === 'assistant') {
@@ -466,7 +477,7 @@ export default function ChatPage() {
           preRecoveryMessagesRef.current = null;
           currentAssistantContentRef.current = '';
           const fallback = data.error || 'Could not get a diagnosis. Try again.';
-          if (base) {
+          if (base?.length) {
             setMessages([
               ...base,
               {
@@ -479,7 +490,30 @@ export default function ChatPage() {
           }
         },
       }
-    );
+    ).catch((err) => {
+      if (generation !== streamGenerationRef.current) return;
+      setSending(false);
+      setStreaming(false);
+      streamDictationRef.current = null;
+      clearSpeakQueue();
+      const base = preRecoveryMessagesRef.current;
+      setIsDiagnosingError(false);
+      recoveryInProgressRef.current = false;
+      preRecoveryMessagesRef.current = null;
+      currentAssistantContentRef.current = '';
+      const fallback = err?.message || 'Could not reach Akira.';
+      if (base?.length) {
+        setMessages([
+          ...base,
+          {
+            role: 'assistant',
+            content: `Could not diagnose: ${fallback}`,
+            error: true,
+            timestamp: new Date().toISOString(),
+          },
+        ]);
+      }
+    });
   }
 
   const handleRegenerate = (assistantIndex) => {
@@ -518,6 +552,7 @@ export default function ChatPage() {
           thinking_budget: settings.thinking_budget,
           enabled_tools: settings.enabled_tools ?? undefined,
           stream: settings.stream,
+          model: settings.current_model,
         },
       },
       {
@@ -592,13 +627,26 @@ export default function ChatPage() {
           setMessages((prev) => {
             const next = [...prev];
             const slot = next[assistantIndex];
+            const partial =
+              slot && slot.role === 'assistant' ? getMessageText(slot.content).trim() : '';
+            const combined = assistantContentAfterStreamError(partial, errorText);
             if (slot && slot.role === 'assistant') {
-              next[assistantIndex] = { ...slot, content: errorText, error: true, timestamp: new Date().toISOString() };
+              next[assistantIndex] = {
+                ...slot,
+                content: combined,
+                error: true,
+                timestamp: new Date().toISOString(),
+              };
             } else {
-              next.push({ role: 'assistant', content: errorText, error: true, timestamp: new Date().toISOString() });
+              next.push({
+                role: 'assistant',
+                content: combined,
+                error: true,
+                timestamp: new Date().toISOString(),
+              });
             }
             preRecoveryMessagesRef.current = next;
-            return [];
+            return next;
           });
           setIsDiagnosingError(true);
           recoveryInProgressRef.current = true;
@@ -665,6 +713,7 @@ export default function ChatPage() {
           thinking_budget: settings.thinking_budget,
           enabled_tools: settings.enabled_tools ?? undefined,
           stream: settings.stream,
+          model: settings.current_model,
         },
       },
       {
@@ -760,13 +809,26 @@ export default function ChatPage() {
           setMessages((prev) => {
             const next = [...prev];
             const slot = next[assistantIndex];
+            const partial =
+              slot && slot.role === 'assistant' ? getMessageText(slot.content).trim() : '';
+            const combined = assistantContentAfterStreamError(partial, errorText);
             if (slot && slot.role === 'assistant') {
-              next[assistantIndex] = { ...slot, content: errorText, error: true, timestamp: new Date().toISOString() };
+              next[assistantIndex] = {
+                ...slot,
+                content: combined,
+                error: true,
+                timestamp: new Date().toISOString(),
+              };
             } else {
-              next.push({ role: 'assistant', content: errorText, error: true, timestamp: new Date().toISOString() });
+              next.push({
+                role: 'assistant',
+                content: combined,
+                error: true,
+                timestamp: new Date().toISOString(),
+              });
             }
             preRecoveryMessagesRef.current = next;
-            return [];
+            return next;
           });
           setIsDiagnosingError(true);
           recoveryInProgressRef.current = true;
@@ -774,7 +836,42 @@ export default function ChatPage() {
           abortedRef.current = false;
         },
       }
-    );
+    ).catch((err) => {
+      if (generation !== streamGenerationRef.current) return;
+      setSending(false);
+      setStreaming(false);
+      streamDictationRef.current = null;
+      clearSpeakQueue();
+      const errorText = err?.message || 'Could not reach Akira.';
+      setMessages((prev) => {
+        const next = [...prev];
+        const slot = next[assistantIndex];
+        const partial =
+          slot && slot.role === 'assistant' ? getMessageText(slot.content).trim() : '';
+        const combined = assistantContentAfterStreamError(partial, errorText);
+        if (slot && slot.role === 'assistant') {
+          next[assistantIndex] = {
+            ...slot,
+            content: combined,
+            error: true,
+            timestamp: new Date().toISOString(),
+          };
+        } else {
+          next.push({
+            role: 'assistant',
+            content: combined,
+            error: true,
+            timestamp: new Date().toISOString(),
+          });
+        }
+        preRecoveryMessagesRef.current = next;
+        return next;
+      });
+      setIsDiagnosingError(true);
+      recoveryInProgressRef.current = true;
+      queueMicrotask(() => runErrorRecovery(errorText));
+      abortedRef.current = false;
+    });
   };
   performSendRef.current = performSend;
 
@@ -789,6 +886,8 @@ export default function ChatPage() {
     const allImages = (options?.images || []).slice(0, MAX_IMAGES);
     performSend(text, { ...options, images: allImages.length ? allImages : undefined });
   };
+  const chatTitle = useMemo(() => getChatTitleFromMessages(messages), [messages]);
+
   const handleVoiceToggle = () => {
     if (!voiceSupport.supported) {
       alert('Voice conversation is not available in this browser. Use the Akira desktop app and ensure the frontend has been rebuilt (npm run build in the frontend folder).');
@@ -856,13 +955,17 @@ export default function ChatPage() {
       />
       <div className="chat-main-wrap">
         <main className="chat-main">
+        <header className="chat-page__top-bar">
+          <h1 className="chat-page__top-bar-title" title={chatTitle}>
+            {chatTitle}
+          </h1>
+        </header>
         {messages.length === 0 && !sending && !isDiagnosingError ? (
           <div className="chat-page__empty" role="region" aria-label={`${BRAND_NAME} chat`}>
             <div className="chat-page__empty-brand">
               <p className="chat-page__empty-name">{BRAND_NAME}</p>
               <p className="chat-page__empty-tagline">{BRAND_MEANING}</p>
             </div>
-            <p className="chat-page__empty-hint">Type a message below to start.</p>
           </div>
         ) : messages.length === 0 && isDiagnosingError ? (
           <div className="chat-page__diagnosing" role="status" aria-live="polite" aria-busy={streaming}>
@@ -874,6 +977,19 @@ export default function ChatPage() {
           </div>
         ) : (
           <>
+            {isDiagnosingError && (
+              <div
+                className="chat-page__diagnosing-inline"
+                role="status"
+                aria-live="polite"
+                aria-busy={streaming}
+              >
+                <p className="chat-page__diagnosing-inline-text">
+                  Checking what went wrong…
+                </p>
+                <div className="chat-page__diagnosing-progress chat-page__diagnosing-inline-progress" aria-hidden />
+              </div>
+            )}
             <div className="chat-page__messages">
               <div
                 ref={messagesContainerRef}

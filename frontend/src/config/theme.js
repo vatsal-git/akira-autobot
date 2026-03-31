@@ -18,13 +18,15 @@ const COLOR_KEYS = [
   'color-send-btn-hover',
   'color-primary',
   'color-primary-hover',
+  'color-brand',
+  'color-on-primary',
   'color-error',
   'color-error-bg',
 ];
 
 const light = {
   'color-fg': '#333333',
-  'color-fg-muted': '#777777',
+  'color-fg-muted': '#454545',
   'color-bg': '#FFFFFF',
   'color-bg-main': '#FFFFFF',
   'color-bg-sidebar': '#F8F8F8',
@@ -33,11 +35,13 @@ const light = {
   'color-border': '#CCCCCC',
   'color-bubble-user': '#F0F0F0',
   'color-highlight': '#CCCCCC',
-  'color-secondary': '#999999',
-  'color-send-btn': '#CCCCCC',
-  'color-send-btn-hover': '#DDDDDD',
-  'color-primary': '#dc2438',
-  'color-primary-hover': '#b81428',
+  'color-secondary': '#6b6b6b',
+  'color-send-btn': '#1a1a1a',
+  'color-send-btn-hover': '#000000',
+  'color-primary': '#1a1a1a',
+  'color-primary-hover': '#000000',
+  'color-brand': '#1a1a1a',
+  'color-on-primary': '#ffffff',
   'color-error': '#CC0000',
   'color-error-bg': '#FFF0F0',
 };
@@ -54,10 +58,12 @@ const dark = {
   'color-bubble-user': '#3A3A3A',
   'color-highlight': '#555555',
   'color-secondary': '#888888',
-  'color-send-btn': '#444444',
-  'color-send-btn-hover': '#555555',
-  'color-primary': '#dc2438',
-  'color-primary-hover': '#b81428',
+  'color-send-btn': '#f0f0f0',
+  'color-send-btn-hover': '#ffffff',
+  'color-primary': '#f0f0f0',
+  'color-primary-hover': '#ffffff',
+  'color-brand': '#f0f0f0',
+  'color-on-primary': '#141414',
   'color-error': '#FF6666',
   'color-error-bg': '#330000',
 };
@@ -123,7 +129,7 @@ function migrateLegacyTheme() {
     const name = (o.theme || '').trim();
     const appearance = DARK_LEGACY_NAMES.has(name) ? 'dark' : 'light';
     const emotionEmoji = LEGACY_THEME_EMOJI[name] || '✨';
-    writeUi({ appearance, emotionEmoji });
+    writeUi(mergeUiState({ appearance, emotionEmoji }));
     localStorage.removeItem(LEGACY_THEME_KEY);
   } catch (_) {}
 }
@@ -132,6 +138,39 @@ function writeUi(state) {
   try {
     localStorage.setItem(UI_STORAGE_KEY, JSON.stringify(state));
   } catch (_) {}
+}
+
+function normalizeBackgroundImage(dataUrl) {
+  if (dataUrl == null || dataUrl === '') return null;
+  if (typeof dataUrl !== 'string') return null;
+  if (!dataUrl.startsWith('data:image/')) return null;
+  return dataUrl;
+}
+
+function mergeUiState(partial) {
+  const prev = readUi() || {};
+  const appearance =
+    partial.appearance !== undefined
+      ? partial.appearance === 'dark'
+        ? 'dark'
+        : 'light'
+      : prev.appearance === 'dark'
+        ? 'dark'
+        : prev.appearance === 'light'
+          ? 'light'
+          : 'light';
+  const emotionEmoji =
+    partial.emotionEmoji !== undefined
+      ? clampEmoji(partial.emotionEmoji)
+      : typeof prev.emotionEmoji === 'string' && prev.emotionEmoji.trim()
+        ? prev.emotionEmoji.trim()
+        : '✨';
+  let backgroundImageDataUrl = partial.backgroundImageDataUrl;
+  if (backgroundImageDataUrl === undefined) {
+    backgroundImageDataUrl = prev.backgroundImageDataUrl ?? null;
+  }
+  backgroundImageDataUrl = normalizeBackgroundImage(backgroundImageDataUrl);
+  return { appearance, emotionEmoji, backgroundImageDataUrl };
 }
 
 /**
@@ -187,13 +226,15 @@ export function applyAppearance(mode, persist = true) {
   if (persist) {
     migrateLegacyTheme();
     const existing = readUi();
-    writeUi({
-      appearance: key,
-      emotionEmoji:
-        typeof existing?.emotionEmoji === 'string' && existing.emotionEmoji.trim()
-          ? existing.emotionEmoji.trim()
-          : '✨',
-    });
+    writeUi(
+      mergeUiState({
+        appearance: key,
+        emotionEmoji:
+          typeof existing?.emotionEmoji === 'string' && existing.emotionEmoji.trim()
+            ? existing.emotionEmoji.trim()
+            : '✨',
+      })
+    );
   }
   return key;
 }
@@ -216,7 +257,40 @@ export function applyEmotion(emoji, persist = true) {
     migrateLegacyTheme();
     const prev = getStoredUi();
     const appearance = prev?.appearance ?? getCurrentAppearance() ?? 'light';
-    writeUi({ appearance, emotionEmoji: value });
+    writeUi(mergeUiState({ appearance, emotionEmoji: value }));
+  }
+  return value;
+}
+
+/**
+ * Stored custom chat background (data URL), or null.
+ * @returns {string|null}
+ */
+export function getStoredBackgroundImage() {
+  migrateLegacyTheme();
+  return normalizeBackgroundImage(readUi()?.backgroundImageDataUrl);
+}
+
+/**
+ * Apply optional full-page chat background from a data URL (or clear when null).
+ * @param {string|null} dataUrl
+ * @param {boolean} persist
+ * @returns {string|null} Applied value or null
+ */
+export function applyBackgroundImage(dataUrl, persist = true) {
+  const value = normalizeBackgroundImage(dataUrl);
+  const root = document.documentElement;
+  if (value) {
+    root.style.setProperty('--chat-bg-image', `url(${JSON.stringify(value)})`);
+    root.setAttribute('data-chat-bg-image', '1');
+  } else {
+    root.style.removeProperty('--chat-bg-image');
+    root.removeAttribute('data-chat-bg-image');
+  }
+
+  if (persist) {
+    migrateLegacyTheme();
+    writeUi(mergeUiState({ backgroundImageDataUrl: value }));
   }
   return value;
 }
@@ -227,12 +301,16 @@ export function applyEmotion(emoji, persist = true) {
  */
 export function applyStoredTheme() {
   migrateLegacyTheme();
+  const raw = readUi();
+  const bg = normalizeBackgroundImage(raw?.backgroundImageDataUrl);
   const stored = getStoredUi();
   if (!stored) {
     applyAppearance('light', true);
+    applyBackgroundImage(null, false);
     return 'light';
   }
   applyAppearance(stored.appearance, false);
+  applyBackgroundImage(bg, false);
   return stored.appearance;
 }
 

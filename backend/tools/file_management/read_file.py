@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 TOOL_DEF = {
     "name": "read_file",
-    "description": "Read content from a file. Use relative paths from the project root (e.g. backend/tools/read_file.py). Paths are canonicalized and must stay inside the project. For large text files, use start_line and end_line to read a range and avoid token limits. Text output can include line numbers to make edits easier.",
+    "description": "Read content from a file. Use relative paths from the project root (e.g. backend/tools/file_management/read_file.py). Paths are canonicalized and must stay inside the project. For large text files, use start_line and end_line to read a range and avoid token limits. Text output can include line numbers to make edits easier.",
     "input_schema": {
         "type": "object",
         "properties": {

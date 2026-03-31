@@ -1,9 +1,10 @@
+import logging
 import os
 import sys
 import dotenv
 from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 # Project root is one level up from backend/
@@ -16,10 +17,27 @@ if PROJECT_ROOT not in sys.path:
 from backend.core.logger import setup_logging
 from backend.services.llm_service import LLM_Service
 from backend.api.routers import chat, history, task
+from backend.config.litellm_loader import list_model_aliases
 
 setup_logging()
 
+logger = logging.getLogger(__name__)
+
+_DEFAULT_MODEL_ENV = os.getenv("DEFAULT_MODEL", "").strip() or None
+llm_service = LLM_Service(default_model=_DEFAULT_MODEL_ENV)
+
 app = FastAPI(title="Akira API", version="1.0.0")
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Return JSON with a detail string so API clients (and the chat UI) never see an empty 500 body."""
+    # HTTPException is handled by FastAPI's more-specific handler, not this one.
+    logger.exception("%s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc) or type(exc).__name__},
+    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -43,7 +61,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-llm_service = LLM_Service()
 app.state.llm_service = llm_service
 
 
@@ -67,15 +84,19 @@ def get_default_settings(request: Request):
     ]
     max_tokens_default = int(os.getenv("MAX_TOKENS", 131072))
     agi_mode = os.getenv("AGI_MODE", "").strip().lower() in ("1", "true", "yes")
+    available_models = list_model_aliases()
+    current_model = getattr(llm.provider, "default_alias", None) or (
+        available_models[0] if available_models else "default"
+    )
     return {
         "max_tokens": max_tokens_default,
         "temperature": float(os.getenv("DEFAULT_TEMPERATURE", "0.7")),
-        "current_model": os.getenv("DEFAULT_MODEL", "openrouter"),
+        "current_model": current_model,
+        "available_models": available_models,
         "thinking_enabled": True,
         "thinking_budget": 16000,
         "stream": True,
         "tools": tools,
-        "available_providers": ["openrouter", "anthropic"],
         "agi_mode": agi_mode,
         "max_tokens_min": int(os.getenv("MAX_TOKENS_MIN", 1)),
         "max_tokens_max": int(os.getenv("MAX_TOKENS_MAX", 200000)),

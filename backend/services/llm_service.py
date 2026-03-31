@@ -1,16 +1,19 @@
 import os
+import re
 import json
+import copy
 import uuid
 import logging
 import base64
 from datetime import datetime
-from .llm_providers import BaseLLMProvider, AnthropicProvider, OpenRouterProvider
+from .llm_providers import LiteLLMProvider
 from .llm_tools import LLM_Tools
 from .task_manager import TaskManager
 from backend.core.history_store import history_lock, load_history as load_history_file, save_history_atomic
 from backend.core.llm_limits import (
     MAX_SINGLE_STRING_IN_TOOL,
     MAX_TOOL_RESULT_JSON_CHARS,
+    DEFAULT_HISTORY_MAX_MESSAGES,
 )
 from backend.core.memory_store import search_memories
 import asyncio
@@ -107,6 +110,29 @@ def _sanitize_tool_result_for_llm(result: Any) -> Any:
     return result
 
 
+def _format_consecutive_tool_failure_message(
+    tool_name: str, status: int, tool_result: Any
+) -> str:
+    """Message for the model when a tool fails on a turn that already followed a tool result."""
+    safe = _sanitize_tool_result_for_llm(tool_result)
+    if isinstance(safe, (dict, list)):
+        try:
+            detail = json.dumps(safe, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            detail = str(safe)
+    else:
+        detail = str(safe) if safe is not None else "(no details returned)"
+    cap = min(MAX_TOOL_RESULT_JSON_CHARS, 12_000)
+    if len(detail) > cap:
+        detail = detail[:cap] + f"\n...[truncated from {len(detail)} characters]"
+    return (
+        f'Tool "{tool_name}" returned status {status} after a previous tool result in this turn. '
+        f"Result / error payload:\n{detail}\n\n"
+        "Use the details above to fix arguments or try another approach. "
+        "If this keeps failing, tell the user or plan a code change."
+    )
+
+
 def _tool_output_image_markdown(
     tool_name: str, tool_input: Any, tool_result: Any, status: int
 ) -> str:
@@ -119,7 +145,7 @@ def _tool_output_image_markdown(
     if len(b64) > MAX_SINGLE_STRING_IN_TOOL:
         return ""
     fmt = tool_result.get("format")
-    if tool_name == "desktop_control" and isinstance(tool_input, dict):
+    if tool_name == "desktop_screen_query" and isinstance(tool_input, dict):
         if str(tool_input.get("action", "")).lower() == "screenshot" and fmt == "jpeg":
             return f"![Screenshot](data:image/jpeg;base64,{b64})\n\n"
     if tool_name == "camera_capture" and fmt == "jpeg":
@@ -138,7 +164,7 @@ def _tool_result_json_for_ui(
         return sanitized_result
     if tool_result.get("format") != "jpeg":
         return sanitized_result
-    if tool_name == "desktop_control" and isinstance(tool_input, dict):
+    if tool_name == "desktop_screen_query" and isinstance(tool_input, dict):
         if str(tool_input.get("action", "")).lower() == "screenshot":
             out = dict(sanitized_result)
             out["base64"] = "[embedded as image above]"
@@ -216,6 +242,164 @@ def _user_message_starts_with_tool_result(msg: dict) -> bool:
     return isinstance(first, dict) and first.get("type") == "tool_result"
 
 
+_MARKDOWN_DATA_IMAGE_RE = re.compile(
+    r"!\[([^\]]*)\]\(data:image/[^)]+\)",
+    re.IGNORECASE,
+)
+
+
+def _redact_assistant_markdown_data_images(text: str) -> str:
+    if not isinstance(text, str) or "data:image" not in text:
+        return text
+    return _MARKDOWN_DATA_IMAGE_RE.sub(r"![\1](image_removed)", text)
+
+
+def _redact_user_content_images_for_storage(content: list) -> list:
+    out = []
+    for block in content:
+        if not isinstance(block, dict):
+            out.append(block)
+            continue
+        if block.get("type") != "image":
+            out.append(block)
+            continue
+        src = block.get("source")
+        if not isinstance(src, dict) or src.get("type") != "base64":
+            out.append(block)
+            continue
+        nb = copy.deepcopy(block)
+        nsrc = dict(nb.get("source") or {})
+        nsrc["type"] = "base64"
+        nsrc["data"] = "[redacted: image bytes]"
+        nb["source"] = nsrc
+        out.append(nb)
+    return out
+
+
+def _prepare_message_for_history_storage(message: dict) -> dict:
+    m = copy.deepcopy(message)
+    role = m.get("role")
+    c = m.get("content")
+    if role == "assistant" and isinstance(c, str):
+        m["content"] = _redact_assistant_markdown_data_images(c)
+    elif role == "user":
+        if isinstance(c, list):
+            m["content"] = _redact_user_content_images_for_storage(c)
+        elif isinstance(c, str) and "data:image" in c:
+            m["content"] = _redact_assistant_markdown_data_images(c)
+    return m
+
+
+def _history_max_stored_messages() -> int:
+    raw = os.getenv(
+        "AKIRA_HISTORY_MAX_MESSAGES", str(DEFAULT_HISTORY_MAX_MESSAGES)
+    ).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return DEFAULT_HISTORY_MAX_MESSAGES
+
+
+def _prune_chat_messages_front(messages: list, max_count: int) -> None:
+    """Drop oldest messages until len(messages) <= max_count; prefer user+assistant pairs."""
+    if max_count <= 0:
+        return
+    while len(messages) > max_count:
+        over = len(messages) - max_count
+        if over >= 2 and len(messages) >= 2:
+            messages.pop(0)
+            messages.pop(0)
+        else:
+            messages.pop(0)
+
+
+def _find_tool_name_for_tool_use_id(
+    messages: list, before_index: int, tool_use_id: str
+) -> str:
+    for j in range(before_index - 1, -1, -1):
+        msg = messages[j]
+        if msg.get("role") != "assistant":
+            continue
+        c = msg.get("content")
+        if not isinstance(c, list):
+            continue
+        for block in c:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use" and block.get("id") == tool_use_id:
+                name = (block.get("name") or "unknown").strip()
+                return name or "unknown"
+    return "unknown"
+
+
+def _tool_result_content_is_placeholder(content: str) -> bool:
+    try:
+        o = json.loads(content)
+        return isinstance(o, dict) and o.get("_redacted") is True
+    except (json.JSONDecodeError, TypeError):
+        return False
+
+
+def _placeholder_tool_result_json(tool_name: str, prev_content: str) -> str:
+    payload: dict[str, Any] = {
+        "_redacted": True,
+        "tool": tool_name,
+        "note": "Output removed after use to save context.",
+    }
+    try:
+        obj = json.loads(prev_content)
+        if isinstance(obj, dict):
+            for key in ("action", "path", "error", "success"):
+                if key not in obj:
+                    continue
+                v = obj[key]
+                if isinstance(v, bool):
+                    payload[key] = v
+                elif isinstance(v, (int, float)):
+                    payload[key] = v
+                elif isinstance(v, str):
+                    payload[key] = v if len(v) <= 200 else v[:200] + "..."
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _compact_stale_tool_results(messages: list) -> None:
+    """Replace tool_result strings with placeholders when a later assistant message exists."""
+    n = len(messages)
+    for i in range(n):
+        msg = messages[i]
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list) or not content:
+            continue
+        if not all(
+            isinstance(b, dict) and b.get("type") == "tool_result" for b in content
+        ):
+            continue
+        if not any(messages[k].get("role") == "assistant" for k in range(i + 1, n)):
+            continue
+        new_blocks = []
+        for block in content:
+            if not isinstance(block, dict):
+                new_blocks.append(block)
+                continue
+            prev = block.get("content")
+            if not isinstance(prev, str) or _tool_result_content_is_placeholder(prev):
+                new_blocks.append(block)
+                continue
+            tid = block.get("tool_use_id") or ""
+            tool_name = _find_tool_name_for_tool_use_id(messages, i, tid)
+            new_blocks.append(
+                {
+                    **block,
+                    "content": _placeholder_tool_result_json(tool_name, prev),
+                }
+            )
+        messages[i] = {**msg, "content": new_blocks}
+
+
 def _load_system_prompt_from_file(path: str) -> str | None:
     """Load system prompt from a file. Returns None if file missing or unreadable."""
     try:
@@ -226,13 +410,13 @@ def _load_system_prompt_from_file(path: str) -> str | None:
 
 
 class LLM_Service(LLM_Tools):
-    def __init__(self, provider_name=None):
+    def __init__(self, default_model=None):
         super().__init__()
         self._context = self  # So tool modules (get_system_prompt, edit_system_prompt, reload_tools) can use the service
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.info("Initializing LLM_Service")
         self.history_file_path = HISTORY_FILE
-        self._set_provider(provider_name or "anthropic")
+        self._init_provider(default_model)
         self.system_prompt = _load_system_prompt_from_file(SYSTEM_PROMPT_FILE) or _DEFAULT_SYSTEM_PROMPT
 
     def _get_system_prompt(self):
@@ -308,21 +492,9 @@ class LLM_Service(LLM_Tools):
             return system_prompt
         return system_prompt + "\n" + "\n".join(lines)
 
-    def _set_provider(self, provider_name: str) -> BaseLLMProvider:
-        """Get the appropriate LLM provider based on name"""
-        providers = {
-            "anthropic": AnthropicProvider,
-            "openrouter": OpenRouterProvider,
-        }
-
-        if provider_name.lower() not in providers:
-            raise ValueError(
-                f"Unsupported provider: {provider_name}. Available providers: {list(providers.keys())}"
-            )
-
-        provider_class = providers[provider_name.lower()]
-
-        self.provider = provider_class()
+    def _init_provider(self, default_model_alias: str | None = None) -> None:
+        """Single LiteLLM Router-backed provider; models are YAML aliases (see backend/config/litellm_config.yaml)."""
+        self.provider = LiteLLMProvider(default_model_alias=default_model_alias)
         self.task_manager = TaskManager(self)
 
     def get_autonomous_thought(self, history, message_limit=10):
@@ -448,7 +620,7 @@ class LLM_Service(LLM_Tools):
         model_override: str | None = None,
     ) -> str:
         """
-        Single-turn multimodal completion with no tools (Claude via Bedrock, or OpenRouter).
+        Single-turn multimodal completion with no tools (via LiteLLM Router).
         Used so large image bytes never enter main chat tool results; prefer the same
         system/temperature/model as the active chat (callers pass those from request context).
         """
@@ -565,23 +737,6 @@ class LLM_Service(LLM_Tools):
 
         return messages
 
-    def get_enabled_tools(self, enabled_tools_map=None):
-        """Get the list of tools that are currently enabled.
-
-        Args:
-            enabled_tools_map: Optional dict mapping tool name -> bool.
-                               When provided, only tools set to True are returned.
-                               When None, all tools are returned.
-        """
-        api_keys = ["name", "description", "input_schema"]
-        if enabled_tools_map:
-            return [
-                {k: tool[k] for k in api_keys}
-                for tool in self.tools_def
-                if enabled_tools_map.get(tool["name"], True)
-            ]
-        return [{k: tool[k] for k in api_keys} for tool in self.tools_def]
-
     def save_to_history(self, message, chat_id=None):
         try:
             if chat_id is None:
@@ -593,9 +748,12 @@ class LLM_Service(LLM_Tools):
                         "created_at": datetime.now().isoformat(),
                         "messages": [],
                     }
-                message_with_timestamp = message.copy()
-                message_with_timestamp["timestamp"] = datetime.now().isoformat()
+                stored = _prepare_message_for_history_storage(message)
+                message_with_timestamp = {**stored, "timestamp": datetime.now().isoformat()}
                 history[chat_id]["messages"].append(message_with_timestamp)
+                cap = _history_max_stored_messages()
+                if cap > 0:
+                    _prune_chat_messages_front(history[chat_id]["messages"], cap)
                 self.logger.debug("Saving message to chat %s", chat_id)
                 save_history_atomic(self.history_file_path, history)
             return chat_id
@@ -764,7 +922,7 @@ class LLM_Service(LLM_Tools):
         )
         messages = self._build_messages(history, user_message)
 
-        # AGI mode: memory injection + task-based model routing (OpenRouter only)
+        # AGI mode: memory injection + task-based model routing (when enabled in litellm config)
         agi_mode = os.getenv("AGI_MODE", "").strip().lower() in ("1", "true", "yes")
         if agi_mode:
             user_text = _user_content_to_text(
@@ -780,21 +938,25 @@ class LLM_Service(LLM_Tools):
                 "\n\nAGI mode: When the request is complex or has multiple steps, use the execute_plan tool to break it down and run the steps. "
                 "Use store_memory for important facts you want to remember across conversations."
             )
-            if model_override is None and isinstance(self.provider, OpenRouterProvider):
-                from backend.agi.task_classifier import classify_task
-                from backend.agi.model_router import get_model_for_task
-                has_images = isinstance(user_message, list) and any(
-                    isinstance(b, dict) and b.get("type") in ("image", "image_url") for b in user_message
-                ) if not isinstance(user_message, str) else False
-                task_type = classify_task(
-                    user_message,
-                    has_images=has_images,
-                    history_messages=history,
-                    use_llm=False,
-                )
-                model_override = get_model_for_task(task_type)
-                if model_override:
-                    self.logger.info("AGI routing: task_type=%s -> model=%s", task_type, model_override)
+            if model_override is None and getattr(self.provider, "supports_agi_task_routing", False):
+                try:
+                    from backend.agi.task_classifier import classify_task
+                    from backend.agi.model_router import get_model_for_task
+                except ImportError:
+                    pass
+                else:
+                    has_images = isinstance(user_message, list) and any(
+                        isinstance(b, dict) and b.get("type") in ("image", "image_url") for b in user_message
+                    ) if not isinstance(user_message, str) else False
+                    task_type = classify_task(
+                        user_message,
+                        has_images=has_images,
+                        history_messages=history,
+                        use_llm=False,
+                    )
+                    model_override = get_model_for_task(task_type)
+                    if model_override:
+                        self.logger.info("AGI routing: task_type=%s -> model=%s", task_type, model_override)
 
         full_response = ""
         continue_after_tool = True
@@ -814,6 +976,7 @@ class LLM_Service(LLM_Tools):
                 thinking_signature = None
                 text_content = ""
 
+                _compact_stale_tool_results(messages)
                 messages = self._trim_messages_for_context_budget(
                     messages,
                     active_system_prompt,
@@ -958,8 +1121,8 @@ class LLM_Service(LLM_Tools):
 
                             # Consecutive tool error: last message was already a tool result; don't loop
                             if status != 200 and _last_message_is_tool_result(messages):
-                                err_content = (
-                                    "The tool call failed again. Try understanding the error message and make a call differently on next iteration. If not fixed, either inform the user or plan to update the code. "
+                                err_content = _format_consecutive_tool_failure_message(
+                                    tool_name, status, tool_result
                                 )
                                 messages.append({"role": "user", "content": err_content})
                                 yield "\n\n" + err_content + "\n\n"
@@ -1119,7 +1282,7 @@ class LLM_Service(LLM_Tools):
         )
         messages = self._build_messages(history, user_message)
 
-        # AGI mode: memory injection + task-based model routing (OpenRouter only)
+        # AGI mode: memory injection + task-based model routing (when enabled in litellm config)
         agi_mode = os.getenv("AGI_MODE", "").strip().lower() in ("1", "true", "yes")
         if agi_mode:
             user_text = _user_content_to_text(
@@ -1135,21 +1298,25 @@ class LLM_Service(LLM_Tools):
                 "\n\nAGI mode: When the request is complex or has multiple steps, use the execute_plan tool to break it down and run the steps. "
                 "Use store_memory for important facts you want to remember across conversations."
             )
-            if model_override is None and isinstance(self.provider, OpenRouterProvider):
-                from backend.agi.task_classifier import classify_task
-                from backend.agi.model_router import get_model_for_task
-                has_images = isinstance(user_message, list) and any(
-                    isinstance(b, dict) and b.get("type") in ("image", "image_url") for b in user_message
-                ) if not isinstance(user_message, str) else False
-                task_type = classify_task(
-                    user_message,
-                    has_images=has_images,
-                    history_messages=history,
-                    use_llm=False,
-                )
-                model_override = get_model_for_task(task_type)
-                if model_override:
-                    self.logger.info("AGI routing: task_type=%s -> model=%s", task_type, model_override)
+            if model_override is None and getattr(self.provider, "supports_agi_task_routing", False):
+                try:
+                    from backend.agi.task_classifier import classify_task
+                    from backend.agi.model_router import get_model_for_task
+                except ImportError:
+                    pass
+                else:
+                    has_images = isinstance(user_message, list) and any(
+                        isinstance(b, dict) and b.get("type") in ("image", "image_url") for b in user_message
+                    ) if not isinstance(user_message, str) else False
+                    task_type = classify_task(
+                        user_message,
+                        has_images=has_images,
+                        history_messages=history,
+                        use_llm=False,
+                    )
+                    model_override = get_model_for_task(task_type)
+                    if model_override:
+                        self.logger.info("AGI routing: task_type=%s -> model=%s", task_type, model_override)
 
         full_response = ""
         continue_after_tool = True
@@ -1169,6 +1336,7 @@ class LLM_Service(LLM_Tools):
                 thinking_signature = None
                 text_content = ""
 
+                _compact_stale_tool_results(messages)
                 messages = self._trim_messages_for_context_budget(
                     messages,
                     active_system_prompt,
@@ -1290,8 +1458,8 @@ class LLM_Service(LLM_Tools):
 
                             # Consecutive tool error: last message was already a tool result; don't loop
                             if status != 200 and _last_message_is_tool_result(messages):
-                                err_content = (
-                                    "The tool call failed again. Try understanding the error message and make a call differently on next iteration. If not fixed, either inform the user or plan to update the code. "
+                                err_content = _format_consecutive_tool_failure_message(
+                                    tool_name, status, tool_result
                                 )
                                 messages.append({"role": "user", "content": err_content})
                                 yield "\n\n" + err_content

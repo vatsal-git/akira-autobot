@@ -1,6 +1,14 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { APPEARANCE_EMOJI, getCurrentAppearance, applyAppearance } from '../config/theme';
+import {
+  APPEARANCE_EMOJI,
+  getCurrentAppearance,
+  applyAppearance,
+  getStoredBackgroundImage,
+  applyBackgroundImage,
+} from '../config/theme';
+
+const MAX_BACKGROUND_IMAGE_BYTES = 2.5 * 1024 * 1024;
 
 const APPEARANCE_OPTIONS = ['light', 'dark'];
 
@@ -21,13 +29,19 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
     () => initialSettings?.enabled_tools ?? {}
   );
   const [stream, setStream] = useState(() => initialSettings?.stream ?? true);
+  const [currentModel, setCurrentModel] = useState(
+    () => initialSettings?.current_model ?? ''
+  );
   const [autonomousMode, setAutonomousMode] = useState(
     () => initialSettings?.autonomous_mode ?? false
   );
   const [appearance, setAppearance] = useState(() => getCurrentAppearance() || 'light');
+  const [backgroundImageDataUrl, setBackgroundImageDataUrl] = useState(() => getStoredBackgroundImage());
+  const [backgroundImageError, setBackgroundImageError] = useState(null);
   const [tooltipActive, setTooltipActive] = useState(null);
   const [tooltipRect, setTooltipRect] = useState(null);
   const tooltipAnchorRef = useRef(null);
+  const backgroundFileInputRef = useRef(null);
 
   const tools = initialSettings?.tools ?? [];
 
@@ -50,8 +64,13 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
     setThinkingBudget(initialSettings?.thinking_budget ?? 16000);
     setEnabledTools(initialSettings?.enabled_tools ?? {});
     setStream(initialSettings?.stream ?? true);
+    setCurrentModel(
+      initialSettings?.current_model ?? initialSettings?.available_models?.[0] ?? ''
+    );
     setAutonomousMode(initialSettings?.autonomous_mode ?? false);
     setAppearance(getCurrentAppearance() || 'light');
+    setBackgroundImageDataUrl(getStoredBackgroundImage());
+    setBackgroundImageError(null);
     setTooltipActive(null);
   }, [open, initialSettings]);
 
@@ -73,6 +92,8 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
   };
 
   const handleSave = () => {
+    applyBackgroundImage(backgroundImageDataUrl, true);
+    applyAppearance(appearance, true);
     onSettingsChange({
       temperature: Number(temperature),
       max_tokens: Number(maxTokens),
@@ -81,9 +102,34 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
       enabled_tools: { ...enabledTools },
       stream: Boolean(stream),
       autonomous_mode: Boolean(autonomousMode),
+      current_model: currentModel,
     });
-    applyAppearance(appearance, true);
     onClose();
+  };
+
+  const handleBackgroundFile = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !file.type.startsWith('image/')) {
+      setBackgroundImageError(file ? 'Choose an image file.' : null);
+      return;
+    }
+    if (file.size > MAX_BACKGROUND_IMAGE_BYTES) {
+      setBackgroundImageError('Image is too large. Use a file under about 2.5 MB.');
+      return;
+    }
+    setBackgroundImageError(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result === 'string' && result.startsWith('data:image/')) {
+        setBackgroundImageDataUrl(result);
+      } else {
+        setBackgroundImageError('Could not read that image. Try another file.');
+      }
+    };
+    reader.onerror = () => setBackgroundImageError('Could not read that file.');
+    reader.readAsDataURL(file);
   };
 
   if (!open) return null;
@@ -127,10 +173,31 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
               LLM
             </h3>
             <div className="settings-modal__field">
-              <span className="settings-modal__label">Model</span>
-              <span className="settings-modal__readonly">
-                {initialSettings?.current_model ?? 'Anthropic'}
-              </span>
+              <label htmlFor="settings-model" className="settings-modal__label">
+                Model
+              </label>
+              {(initialSettings?.available_models?.length ?? 0) > 0 ? (
+                <select
+                  id="settings-model"
+                  className="settings-modal__input"
+                  value={
+                    (initialSettings.available_models || []).includes(currentModel)
+                      ? currentModel
+                      : (initialSettings.available_models || [])[0] || currentModel
+                  }
+                  onChange={(e) => setCurrentModel(e.target.value)}
+                >
+                  {(initialSettings.available_models || []).map((id) => (
+                    <option key={id} value={id}>
+                      {id}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="settings-modal__readonly">
+                  {initialSettings?.current_model ?? '—'}
+                </span>
+              )}
             </div>
             <div className="settings-modal__field">
               <label htmlFor="settings-temperature" className="settings-modal__label">
@@ -330,6 +397,56 @@ export function SettingsModal({ open, onClose, settings: initialSettings, onSett
                   Dark
                 </span>
               </div>
+            </div>
+            <div className="settings-modal__field settings-modal__field--bg-image">
+              <span id="settings-bg-image-label" className="settings-modal__label">
+                Background image
+              </span>
+              <p id="settings-bg-image-desc" className="settings-modal__hint settings-modal__field--bg-image-desc">
+                Optional. Shown behind the chat. Stored only on this device.
+              </p>
+              <div className="settings-modal__bg-image-row">
+                <input
+                  ref={backgroundFileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="settings-modal__bg-file-input"
+                  aria-labelledby="settings-bg-image-label"
+                  aria-describedby="settings-bg-image-desc"
+                  onChange={handleBackgroundFile}
+                />
+                <button
+                  type="button"
+                  className="settings-modal__btn settings-modal__btn--secondary settings-modal__btn--compact"
+                  onClick={() => backgroundFileInputRef.current?.click()}
+                >
+                  Upload image
+                </button>
+                {backgroundImageDataUrl && (
+                  <button
+                    type="button"
+                    className="settings-modal__btn settings-modal__btn--secondary settings-modal__btn--compact"
+                    onClick={() => {
+                      setBackgroundImageDataUrl(null);
+                      setBackgroundImageError(null);
+                    }}
+                  >
+                    Remove
+                  </button>
+                )}
+                {backgroundImageDataUrl && (
+                  <span
+                    className="settings-modal__bg-thumb"
+                    style={{ backgroundImage: `url(${JSON.stringify(backgroundImageDataUrl)})` }}
+                    aria-hidden
+                  />
+                )}
+              </div>
+              {backgroundImageError && (
+                <p className="settings-modal__hint settings-modal__hint--error" role="alert">
+                  {backgroundImageError}
+                </p>
+              )}
             </div>
           </section>
         </div>

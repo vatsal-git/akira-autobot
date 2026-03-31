@@ -5,7 +5,7 @@ import uuid
 import asyncio
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 
@@ -129,6 +129,7 @@ async def _chat_event_stream(
     enabled_tools_map: Optional[Dict[str, bool]],
     stream: bool = True,
     tool_timeout_seconds: Optional[float] = None,
+    model_override: Optional[str] = None,
 ):
     """Async generator: yields SSE lines with meta, delta, done/error; handles disconnect and heartbeat.
     When stream=False, collects the full response then yields meta, one delta, done."""
@@ -148,6 +149,7 @@ async def _chat_event_stream(
             thinking_budget=thinking_budget,
             enabled_tools_map=enabled_tools_map,
             tool_timeout_seconds=tool_timeout_seconds,
+            model_override=model_override,
         )
         stream_anext = stream_gen.__anext__
 
@@ -293,6 +295,12 @@ async def chat_stream(body: ChatRequest, request: Request):
         except (TypeError, ValueError):
             tool_timeout_seconds = None
 
+    model_override = settings.get("model")
+    if isinstance(model_override, str):
+        model_override = model_override.strip() or None
+    else:
+        model_override = None
+
     message = body.message
 
     # Merge non-image files into message text so Akira can understand them
@@ -341,6 +349,14 @@ async def chat_stream(body: ChatRequest, request: Request):
         "timestamp": datetime.now().isoformat(),
     }
     chat_id = llm.save_to_history(user_msg, body.chat_id)
+    if not chat_id:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Could not save conversation history. Check server logs, disk space, "
+                "and backend/akira_history.json (invalid JSON can be fixed or the file removed to reset)."
+            ),
+        )
 
     return StreamingResponse(
         _chat_event_stream(
@@ -356,6 +372,7 @@ async def chat_stream(body: ChatRequest, request: Request):
             enabled_tools_map=enabled_tools_map,
             stream=stream,
             tool_timeout_seconds=tool_timeout_seconds,
+            model_override=model_override,
         ),
         media_type="text/event-stream; charset=utf-8",
     )

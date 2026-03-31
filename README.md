@@ -121,9 +121,9 @@ Akira provides:
 
 ### Tools (function calling)
 
-Tools live in `backend/tools/`: each module defines `TOOL_DEF` (name, description, `input_schema`, optional `default_enabled`, optional `timeout_seconds`) and `call_tool(input, context)`. The LLM service maps them to provider-specific schemas and runs tool rounds during streaming.
+Tools live under `backend/tools/` in **category subfolders** (e.g. `file_management/`, `memory_management/`, `desktop_control/`). Each tool module defines `TOOL_DEF` (name, description, `input_schema`, optional `default_enabled`, optional `timeout_seconds`) and `call_tool(input, context)`. Discovery walks subfolders recursively; modules named with a leading `_` are skipped. The LLM service maps tools to provider-specific schemas and runs tool rounds during streaming.
 
-**Current modules** (as checked in from `backend/tools/`):
+**Current tools** (grouped by folder):
 
 | Tool              | Purpose |
 |-------------------|--------|
@@ -306,7 +306,7 @@ Akira/
 
 ## Development notes
 
-- **Adding a tool**: Add `backend/tools/<name>.py` with `TOOL_DEF` and `call_tool`; call the `reload_tools` tool or restart the backend.
+- **Adding a tool**: Add `backend/tools/<category>/<name>.py` (pick or create a category folder) with `TOOL_DEF` and `call_tool`; call the `reload_tools` tool or restart the backend.
 - **System prompt**: Edit `backend/akira_system_prompt.md` (or use `LLM_Service` read/write helpers in code). Keep tool names in the prompt aligned with actual tools in `backend/tools/`.
 - **OpenRouter model ranking**: Run `backend/scripts/rank_openrouter_models.py` with `OPENROUTER_API_KEY` set.
 - **Rate limiting**: `backend/core/rate_limit.py` — default 20 requests per minute per client key.

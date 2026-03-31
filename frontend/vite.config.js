@@ -15,7 +15,7 @@ export default defineConfig({
         short_name: 'Akira',
         description:
           'Akira — your conversational AI assistant: clear answers, tools, and memory.',
-        theme_color: '#dc2438',
+        theme_color: '#1a1a1a',
         background_color: '#1a1a1a',
         display: 'standalone',
         orientation: 'portrait-primary',

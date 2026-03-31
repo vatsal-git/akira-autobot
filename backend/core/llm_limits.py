@@ -2,3 +2,6 @@
 
 MAX_TOOL_RESULT_JSON_CHARS = 100_000
 MAX_SINGLE_STRING_IN_TOOL = 48_000
+
+# Max messages per chat in akira_history.json (0 = unlimited). Override with AKIRA_HISTORY_MAX_MESSAGES.
+DEFAULT_HISTORY_MAX_MESSAGES = 100

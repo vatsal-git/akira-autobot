@@ -201,7 +201,8 @@ function createWindow() {
     resizable: true,
     minWidth: 320,
     minHeight: 400,
-    backgroundMaterial: config.transparent ? 'acrylic' : 'none',
+    backgroundColor: '#00000000', // Fully transparent background
+    hasShadow: false, // Disable native shadow to prevent white box
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

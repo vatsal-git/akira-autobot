@@ -721,7 +721,9 @@ ipcMain.on('send-message', async (event, { message, chatId, model, history }) =>
 
   const settings = {
     maxTokens: store.get('maxTokens', 4096),
-    temperature: store.get('temperature', 0.7)
+    temperature: store.get('temperature', 0.7),
+    thinkingEnabled: store.get('thinkingEnabled', true),
+    thinkingBudget: store.get('thinkingBudget', 10000)
   };
 
   const finalChatId = chatId || require('uuid').v4();
@@ -822,7 +824,13 @@ ipcMain.on('send-message', async (event, { message, chatId, model, history }) =>
             tools: tools.length > 0 ? tools : undefined,
             tool_choice: 'auto',
             max_tokens: maxTokens,
-            temperature: settings.temperature
+            temperature: settings.temperature,
+            ...(settings.thinkingEnabled && {
+              thinking: {
+                type: 'enabled',
+                budget_tokens: settings.thinkingBudget
+              }
+            })
           }),
           signal: controller.signal
         });
@@ -832,7 +840,7 @@ ipcMain.on('send-message', async (event, { message, chatId, model, history }) =>
           rateLimitedModels.set(currentModel, Date.now() + RATE_LIMIT_COOLDOWN_MS);
           if (i < modelsToTry.length - 1) continue;
           const errorText = await response.text();
-          event.reply('chat-stream', { event: 'error', data: { error: `All models unavailable: ${errorText}` }, chatId: finalChatId });
+          event.reply('chat-stream', { event: 'error', data: { error: `All free models are rate-limited. Please add a paid API key at https://openrouter.ai/settings/integrations to get higher limits.` }, chatId: finalChatId });
           return;
         }
 
@@ -914,7 +922,22 @@ ipcMain.on('send-message', async (event, { message, chatId, model, history }) =>
     }
 
     // No tool calls - this is the final response
-    const content = assistantMessage.content || '';
+    // Handle content - could be string or array of content blocks (for thinking)
+    let content = '';
+    let thinking = '';
+
+    if (Array.isArray(assistantMessage.content)) {
+      // Content blocks format (used by Claude with thinking)
+      for (const block of assistantMessage.content) {
+        if (block.type === 'thinking') {
+          thinking = block.thinking || '';
+        } else if (block.type === 'text') {
+          content = block.text || '';
+        }
+      }
+    } else {
+      content = assistantMessage.content || '';
+    }
 
     // Add to history
     messages.push({ role: 'assistant', content });
@@ -922,6 +945,11 @@ ipcMain.on('send-message', async (event, { message, chatId, model, history }) =>
 
     // Auto-save to persistent storage
     saveChatToPersistent(finalChatId, messages);
+
+    // Send thinking first if present
+    if (thinking) {
+      event.reply('chat-stream', { event: 'thinking', data: { thinking }, chatId: finalChatId });
+    }
 
     // Stream the content (simulate streaming for non-streaming response)
     if (content) {

@@ -163,6 +163,20 @@ function Widget({ settings, onSettingsChange }) {
         setChatId(data.data.chat_id);
         break;
 
+      case 'thinking':
+        setMessages(prev => {
+          const newMessages = [...prev];
+          const lastIdx = newMessages.length - 1;
+          if (lastIdx >= 0 && newMessages[lastIdx].role === 'assistant') {
+            newMessages[lastIdx] = {
+              ...newMessages[lastIdx],
+              thinking: data.data.thinking || '',
+            };
+          }
+          return newMessages;
+        });
+        break;
+
       case 'delta':
         currentContentRef.current += data.data.delta || '';
         setMessages(prev => {
@@ -243,15 +257,31 @@ function Widget({ settings, onSettingsChange }) {
       case 'error':
         setSending(false);
         setStreaming(false);
+        // Preserve partial content if we were streaming
+        const partialContent = currentContentRef.current;
         currentContentRef.current = '';
-        setMessages(prev => [
-          ...prev,
-          {
-            role: 'assistant',
-            content: `Error: ${data.data.error || 'Something went wrong'}`,
-            error: true,
-          },
-        ]);
+        setMessages(prev => {
+          const newMessages = [...prev];
+          const lastIdx = newMessages.length - 1;
+          // If we have a partial response, keep it and mark as incomplete
+          if (lastIdx >= 0 && newMessages[lastIdx].role === 'assistant' && partialContent) {
+            newMessages[lastIdx] = {
+              ...newMessages[lastIdx],
+              content: partialContent,
+              error: true,
+              incomplete: true,
+              errorMessage: data.data.error || 'Something went wrong',
+            };
+          } else {
+            // No partial content, just add error message
+            newMessages.push({
+              role: 'assistant',
+              content: `Error: ${data.data.error || 'Something went wrong'}`,
+              error: true,
+            });
+          }
+          return newMessages;
+        });
         break;
 
       default:

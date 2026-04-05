@@ -1,230 +1,321 @@
-# Akira
+<p align="center">
+  <img src="frontend/public/logo.jpg" alt="Akira Autobot" width="120" height="120" style="border-radius: 20px;">
+</p>
 
-**Akira** is a full-stack conversational AI assistant: a **FastAPI** backend with multi-provider LLMs, streaming tool use, and a **React + Vite** chat UI (optional **Electron** desktop). It is built for extensibility, provider switching, and a polished day-to-day chat experience—including markdown, diagrams, attachments, and voice.
+<h1 align="center">Akira Autobot</h1>
 
----
+<p align="center">
+  <strong>A self-evolving AI assistant that controls your desktop, writes its own tools, and gets smarter over time</strong>
+</p>
 
-## Resume-ready project summary
+<p align="center">
+  <a href="#-key-innovations"><img src="https://img.shields.io/badge/AI-Self--Evolving-blueviolet?style=for-the-badge" alt="Self-Evolving AI"></a>
+  <a href="#-desktop-automation"><img src="https://img.shields.io/badge/Desktop-Automation-orange?style=for-the-badge" alt="Desktop Automation"></a>
+  <a href="#-architecture"><img src="https://img.shields.io/badge/Stack-Full--Stack-blue?style=for-the-badge" alt="Full Stack"></a>
+</p>
 
-Use the bullets below (tweak wording to first person) on a resume, LinkedIn, or portfolio. They reflect what the project implements end to end.
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black" alt="React">
+  <img src="https://img.shields.io/badge/Vite-5-646CFF?logo=vite&logoColor=white" alt="Vite">
+  <img src="https://img.shields.io/badge/Electron-47848F?logo=electron&logoColor=white" alt="Electron">
+</p>
 
-### Product and scope
+<br>
 
-- Owned an **AI chat product** from API design through UI: streaming conversations, multi-chat history, settings, branching, task planning, and optional voice and camera input.
-- Delivered a **multi-provider LLM layer** so one codebase talks to **OpenRouter** (many models, one HTTP API) and **Anthropic Claude via AWS Bedrock**, including streaming responses and **function calling / tool loops** across providers.
-
-### Backend (Python)
-
-- Built a **FastAPI** service with **REST + Server-Sent Events (SSE)** for low-latency token streaming, **heartbeat keepalives**, a **long stream timeout** (10 minutes), and **stop/cancel** behavior when the client aborts.
-- Implemented **Pydantic** request models with validation: max message length, image/file **count and size** limits, **UUID** `chat_id` enforcement, and safe **base64** handling for attachments.
-- Designed a **pluggable tool system**: Python modules under `backend/tools/` export `TOOL_DEF` + `call_tool`; tools are **discovered at runtime** and can be **reloaded without restarting** the server.
-- Ran tool handlers in a **bounded thread pool** with **configurable timeouts** (request-level, per-tool defaults, and optional per-invocation caps).
-- Persisted conversations to **JSON** with **cross-platform file locking** (Windows `msvcrt` / Unix `fcntl`) and **atomic writes** to avoid corrupted history under concurrent access.
-- Implemented **branch-from-message**: fork a chat at a given index with new user content and a new `chat_id`.
-- Added **in-memory rate limiting** on chat (e.g. requests per minute per IP or `X-User-ID`).
-- Built a **long-term memory** store (`akira_memory.json`) with **search** and lock-safe updates; **AGI mode** optionally **injects relevant memories** into the system prompt from the user’s latest message.
-- Implemented a **TaskManager** that asks the LLM for a **JSON task tree** (sequential / parallel / leaf tasks), then **executes** it asynchronously while **streaming progress** over SSE.
-- Hardened **file tools** with a **workspace root**, **path canonicalization**, **traversal checks**, **blocked paths** (e.g. `.git`, `node_modules`), and **atomic** text writes.
-- Loaded the assistant **system prompt from Markdown** on disk with an **in-code fallback**; merged an **authoritative list of enabled tools** into the prompt so capability answers stay consistent with what is actually exposed.
-- Injected **per-message timestamps** (`[Sent at: …]`) into content so the model can reason about timing across a long thread.
-- Added **autonomous mode** logic: when the user is idle, the backend can prompt the model for a **proactive thought or tool use** (with a **no-op** path when there is nothing useful to do).
-- Exposed **health** (`/api/health`) and **readiness** (`/api/ready`) checks; served **built static frontend** from the same process in production; exposed **secure filename-only** serving for **PNG screenshots** under `/api/screenshots/`.
-- Centralized **logging** and **environment-driven** defaults (temperature, token limits, thinking budget bounds, optional **AGI_MODE**, default provider).
-- Wrote **automated tests** around task tooling and **tool schema filtering** (e.g. ensuring API-facing tool definitions do not leak internal fields).
-
-### Frontend (React / JavaScript)
-
-- Implemented the chat app with **React 18**, **Vite 5**, **React Router**, **react-markdown** + **remark-gfm** for **GitHub-flavored markdown**.
-- Built **rich assistant rendering**: fenced **code blocks** with dedicated UI, **collapsible “thinking”** and **tool-use** sections (streaming-safe parsing), and **Mermaid** diagrams with **theme variables** tied to CSS custom properties.
-- Delivered **multi-image** and **generic file** attachments, wired to the same limits as the backend, for **vision** and text-file context.
-- Consumed SSE in the client with **`AbortController`** for **stop generation**, plus handlers for **meta**, **delta**, **settings**, **done**, and **error** events.
-- Created a **settings** surface: provider, **temperature**, **max tokens**, **extended thinking** toggle and **budget**, **per-tool toggles**, **stream vs buffer** mode, **autonomous mode**, and **light/dark appearance**—with **localStorage** persistence for user preferences.
-- Integrated **Web Speech API** for **dictation** and **text-to-speech** (voice conversation mode) where the browser supports it.
-- Added **camera capture** for attaching live photos to messages.
-- Used **audio feedback** when a response completes (optional UX polish).
-- Configured **vite-plugin-pwa** and **Workbox**: **web app manifest**, **service worker**, **offline shell**, and **runtime caching** for Google Fonts.
-- Set up a **dev proxy** from the Vite server to the API; supported **configurable API base URL** for packaged or alternate deployments (e.g. Electron).
-
-### Desktop and tooling
-
-- Packaged or documented an **Electron** app that **reuses the same React UI** and points at a configurable backend URL (see `desktop/README.md`).
-- Authored a **script** to **rank OpenRouter models** (with optional cached JSON output) to inform default model choices.
-
-### Architecture and API design
-
-- Treated the backend as the **single source of truth** for **tool definitions** and **provider capabilities**, while keeping the UI **stateless** aside from local preferences and appearance.
-- Used **SSE** instead of WebSockets for **simple, firewall-friendly** streaming with standard HTTP infrastructure.
+<!-- DEMO GIF PLACEHOLDER -->
+<p align="center">
+  <img src="docs/demo.gif" alt="Akira Autobot Demo" width="800">
+  <br>
+  <em>Akira automating desktop tasks with natural language</em>
+</p>
 
 ---
 
-## Overview
+## What Makes Akira Different?
 
-Akira provides:
+Most AI assistants are **static** - they do what they're programmed to do. Akira is **dynamic**:
 
-- **Multi-provider LLM integration** — Switch between **OpenRouter** and **Anthropic (Bedrock)** using environment and UI settings.
-- **Tool use (function calling)** — Curated tools under `backend/tools/`; streaming tool rounds; per-conversation enable/disable from the UI; authoritative tool list injected into the system prompt.
-- **Streaming chat API** — SSE with heartbeats and timeouts; images and file attachments for vision-capable models.
-- **Conversation history and branching** — JSON persistence with locking; branch from a message with new content.
-- **Task decomposition** — Task API streams a plan (task tree) and execution updates.
-- **Customizable system prompt** — Markdown file on the server; service APIs to read/write programmatically (`LLM_Service`); fallback prompt in code if the file is missing.
-- **Appearance and settings** — Light/dark UI (client-side, persisted locally); temperature, max tokens, thinking budget, tools, stream mode, autonomous mode via settings API + localStorage.
-- **Web and desktop** — React + Vite for the browser; PWA support; Electron option for desktop.
+| Traditional AI Assistant | Akira Autobot |
+|--------------------------|---------------|
+| Fixed set of capabilities | **Writes new tools on demand** |
+| Can't interact with your desktop | **Full desktop automation** with multiple fallback strategies |
+| Forgets everything between sessions | **Persistent memory** that grows over time |
+| Single LLM provider | **Multi-provider** (OpenRouter, Anthropic/Bedrock) |
+| Chat-only interface | **Web, Desktop App, Browser Extension, Telegram** |
+
+---
+
+## Key Innovations
+
+### Self-Evolving Architecture
+
+Akira can **modify itself** while running:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    SELF-MODIFICATION LOOP                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   User: "I need a tool that can resize images"                  │
+│                           │                                     │
+│                           ▼                                     │
+│   ┌─────────────────────────────────────────┐                   │
+│   │  Akira writes new tool:                 │                   │
+│   │  backend/tools/media/resize_image.py    │                   │
+│   └─────────────────────────────────────────┘                   │
+│                           │                                     │
+│                           ▼                                     │
+│   ┌─────────────────────────────────────────┐                   │
+│   │  Hot-reload: Tool available instantly   │                   │
+│   │  No server restart required             │                   │
+│   └─────────────────────────────────────────┘                   │
+│                           │                                     │
+│                           ▼                                     │
+│   ┌─────────────────────────────────────────┐                   │
+│   │  Akira uses the new tool immediately    │                   │
+│   └─────────────────────────────────────────┘                   │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**What Akira can modify:**
+- **Its own tools** - Create new Python tools that become immediately available
+- **System prompt** - Adjust its own personality, capabilities, and behavior guidelines
+- **Tool definitions** - Modify schemas, timeouts, and default states
+- **Memory** - Build persistent knowledge that survives across sessions
+
+### Desktop Automation
+
+Akira doesn't just chat - it **acts**. Three-tier automation with intelligent fallback:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                     DESKTOP AUTOMATION ENGINE                          │
+├────────────────────────────────────────────────────────────────────────┤
+│                                                                        │
+│  TIER 1: Windows UIA (Accessibility API)                               │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │  • Native Windows control access                                 │  │
+│  │  • Direct element interaction (buttons, menus, text fields)      │  │
+│  │  • Works with: Win32, WPF, most desktop apps                     │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+│                              │                                         │
+│                    ╔═════════╧═════════╗                               │
+│                    ║  UIA not working? ║                               │
+│                    ╚═════════╤═════════╝                               │
+│                              ▼                                         │
+│  TIER 2: Vision Parsing (EasyOCR + OmniParser)                         │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │  • Screenshot → AI vision analysis                               │  │
+│  │  • OCR for text recognition                                      │  │
+│  │  • OmniParser for UI element detection                           │  │
+│  │  • Works with: Web apps, Electron, custom UI frameworks          │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+│                              │                                         │
+│                    ╔═════════╧═════════╗                               │
+│                    ║  Parse failed?    ║                               │
+│                    ╚═════════╤═════════╝                               │
+│                              ▼                                         │
+│  TIER 3: Direct Screen Interaction                                     │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │  • PyAutoGUI mouse/keyboard control                              │  │
+│  │  • Screenshot + LLM reasoning                                    │  │
+│  │  • Works with: Anything visible on screen                        │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+│                                                                        │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+**Desktop tools available:**
+
+| Tool | Capability |
+|------|------------|
+| `windows_uia` | Query accessibility tree, invoke controls, set values |
+| `desktop_mouse` | Click, drag, scroll, move cursor |
+| `desktop_keyboard` | Type text, press keys, hotkey combinations |
+| `desktop_screen_query` | Screenshot, get mouse position, screen size |
+| `desktop_ui_parse` | Vision-based UI element detection |
+| `desktop_wait` | Intelligent pauses for animations/loading |
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Clients                                                        │
-│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐ │
-│  │ Web (React)  │  │ Electron     │  │ Other API consumers    │ │
-│  │ (Vite dev)   │  │ Desktop App  │  │ (curl, scripts, etc.)  │ │
-│  └──────┬───────┘  └──────┬───────┘  └────────────┬───────────┘ │
-└─────────┼──────────────────┼───────────────────────┼─────────────┘
-          │                  │                       │
-          ▼                  ▼                       ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Backend (FastAPI) — default PORT from env (see Quick start)       │
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │  API: /api/chat (SSE), /api/history, /api/task (SSE),       │ │
-│  │       /api/settings, /api/health, /api/ready,               │ │
-│  │       /api/screenshots/{filename}                           │ │
-│  └─────────────────────────────────────────────────────────────┘ │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌──────────────────┐ │
-│  │ LLM Service     │  │ Task Manager    │  │ Tool discovery   │ │
-│  │ (streaming,     │  │ (plan + execute │  │ (backend/tools)  │ │
-│  │  tool loops)    │  │  task tree)     │  │                  │ │
-│  └────────┬────────┘  └────────┬────────┘  └─────────┬────────┘ │
-│           │                     │                     │            │
-│  ┌────────▼─────────────────────▼─────────────────────▼──────────┐ │
-│  │  Providers: OpenRouter | Anthropic (Bedrock)                   │ │
-│  └─────────────────────────────────────────────────────────────────┘ │
-│  Persistence: akira_history.json, akira_memory.json, screenshots/   │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              CLIENTS                                        │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
+│  │  Web App     │  │  Desktop     │  │  Browser     │  │  Telegram    │     │
+│  │  (React)     │  │  (Electron)  │  │  Extension   │  │  Bot         │     │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘     │
+└─────────┼──────────────────┼──────────────────┼──────────────────┼───────────┘
+          │                  │                  │                  │
+          └──────────────────┴─────────┬────────┴──────────────────┘
+                                       │
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         FASTAPI BACKEND                                     │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │                           API LAYER                                    │ │
+│  │   POST /api/chat (SSE)  │  GET /api/history  │  POST /api/task (SSE)   │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                                    │                                        │
+│  ┌─────────────────┬───────────────┼───────────────┬─────────────────────┐  │
+│  │                 │               │               │                     │  │
+│  ▼                 ▼               ▼               ▼                     │  │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────────────┐  │  │
+│  │   LLM    │  │   Task   │  │  Memory  │  │     TOOL ENGINE          │  │  │
+│  │ Service  │  │ Manager  │  │  Store   │  │  ┌────────────────────┐  │  │  │
+│  │          │  │          │  │          │  │  │ File Management    │  │  │  │
+│  │ Streaming│  │ Plan +   │  │ Search + │  │  │ Desktop Control    │  │  │  │
+│  │ Tool Loop│  │ Execute  │  │ Inject   │  │  │ Internet Search    │  │  │  │
+│  └────┬─────┘  └──────────┘  └──────────┘  │  │ Memory Management  │  │  │  │
+│       │                                     │  │ System Tools       │  │  │  │
+│       ▼                                     │  │ + Hot Reload       │  │  │  │
+│  ┌──────────────────────────────────────┐  │  └────────────────────┘  │  │  │
+│  │           LLM PROVIDERS              │  └──────────────────────────┘  │  │
+│  │  ┌────────────┐    ┌──────────────┐  │                                │  │
+│  │  │ OpenRouter │    │  Anthropic   │  │                                │  │
+│  │  │ (100+ LLMs)│    │  (Bedrock)   │  │                                │  │
+│  │  └────────────┘    └──────────────┘  │                                │  │
+│  └──────────────────────────────────────┘                                │  │
+│                                                                          │  │
+│  ┌──────────────────────────────────────────────────────────────────────┐│  │
+│  │  PERSISTENCE: akira_history.json │ akira_memory.json │ screenshots/  ││  │
+│  └──────────────────────────────────────────────────────────────────────┘│  │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Frontend** (`frontend/`): React 18, Vite 5, React Router, Markdown (GFM), Mermaid, PWA (Workbox). Dev server proxies `/api` to the backend.
-- **Backend** (`backend/`): FastAPI, CORS for local dev and Electron, rate limiting on chat, optional static serving of `frontend/dist`.
-- **Desktop** (`desktop/`): Electron loads the React app; backend runs separately.
+---
+
+## Features
+
+### Multi-Platform Access
+
+| Platform | Description |
+|----------|-------------|
+| **Web App** | React 18 + Vite 5, PWA support, works offline |
+| **Desktop App** | Electron wrapper, native feel, always accessible |
+| **Browser Extension** | Chrome sidepanel, context-aware assistance |
+| **Telegram Bot** | Chat from anywhere, mobile-friendly |
+
+### Intelligent Chat
+
+- **Streaming responses** with SSE (Server-Sent Events)
+- **Markdown rendering** with GitHub-flavored syntax
+- **Mermaid diagrams** rendered inline
+- **Code blocks** with syntax highlighting
+- **Image & file attachments** for vision-capable models
+- **Conversation branching** - fork at any message
+- **Voice input/output** via Web Speech API
+
+### Tool System
+
+20+ built-in tools across 6 categories:
+
+```
+backend/tools/
+├── desktop_control/          # Windows automation
+│   ├── windows_uia.py        # Accessibility API
+│   ├── desktop_mouse.py      # Mouse control
+│   ├── desktop_keyboard.py   # Keyboard control
+│   ├── desktop_screen_query.py
+│   ├── desktop_ui_parse.py   # Vision parsing
+│   └── desktop_wait.py
+├── file_management/          # Sandboxed file ops
+│   ├── read_file.py
+│   ├── write_file.py
+│   ├── patch_file.py
+│   └── list_dir.py
+├── internet_search/          # Web capabilities
+│   ├── web_search.py
+│   └── fetch_webpage.py
+├── memory_management/        # Persistent memory
+│   ├── store_memory.py
+│   ├── search_memories.py
+│   └── list_memories.py
+├── media_devices/            # Hardware access
+│   └── camera_capture.py
+└── system_tools/             # Meta operations
+    ├── execute_command.py
+    └── reload_tools.py       # Hot reload!
+```
+
+**Adding a new tool is simple:**
+
+```python
+# backend/tools/my_category/my_tool.py
+
+TOOL_DEF = {
+    "name": "my_tool",
+    "description": "What this tool does",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "param": {"type": "string", "description": "Parameter description"}
+        },
+        "required": ["param"]
+    }
+}
+
+def call_tool(input: dict, context: dict) -> str:
+    # Your tool logic here
+    return "Result"
+```
+
+Then call `reload_tools` or restart - Akira can now use it.
 
 ---
 
-## Features in detail
+## Quick Start
 
-### LLM providers
+### Prerequisites
 
-| Provider       | Description                    | Configuration (env) |
-|----------------|--------------------------------|----------------------|
-| **OpenRouter** | Unified API for many models    | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `DEFAULT_MODEL=openrouter`, etc. |
-| **Anthropic**  | Claude via AWS Bedrock         | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `BEDROCK_ENDPOINT` (optional), `CLAUDE_INFERENCE_PROFILE` |
+- Python 3.10+
+- Node.js 18+
+- API keys for OpenRouter and/or AWS Bedrock
 
-### Tools (function calling)
-
-Tools live under `backend/tools/` in **category subfolders** (e.g. `file_management/`, `memory_management/`, `desktop_control/`). Each tool module defines `TOOL_DEF` (name, description, `input_schema`, optional `default_enabled`, optional `timeout_seconds`) and `call_tool(input, context)`. Discovery walks subfolders recursively; modules named with a leading `_` are skipped. The LLM service maps tools to provider-specific schemas and runs tool rounds during streaming.
-
-**Current tools** (grouped by folder):
-
-| Tool              | Purpose |
-|-------------------|--------|
-| `read_file`       | Read file contents under the workspace (optional line range). |
-| `write_file`      | Write or append; uses sandboxed paths and atomic writes. |
-| `patch_file`      | Apply patch-style edits. |
-| `list_dir`        | List directory entries under the workspace. |
-| `execute_command` | Run shell commands (use with care; environment-dependent). |
-| `web_search`      | Web search (optional API keys per implementation). |
-| `reload_tools`    | Reload tool definitions from disk without server restart. |
-| `store_memory`    | Append a long-term memory record. |
-| `search_memories` | Search stored memories by text. |
-| `list_memories`   | List stored memories. |
-
-Users enable or disable tools per conversation in the UI; only enabled tools are sent to the model and listed in the injected system prompt section.
-
-### Chat API
-
-- **POST /api/chat** — Body: `message`, optional `chat_id`, `images[]`, `files[]`, `settings` (temperature, `max_tokens`, thinking flags, `enabled_tools`, `stream`, etc.). Response: SSE with events such as `meta`, `delta`, `settings`, `done`, `error` (and heartbeats). Text files can be inlined into the message on the server; images use vision-capable models when available.
-- **POST /api/chat/branch** — Branch at `message_index` with `new_content`; returns a new `chat_id`.
-- **GET /api/history** — List chats (metadata).
-- **GET /api/history/{chat_id}** — Full messages for one chat.
-- **DELETE /api/history/{chat_id}** — Delete a chat.
-
-### Task API
-
-- **POST /api/task** — Body: `goal`. Streams SSE: plan (task tree), per-node updates, `done` or `error`. The `TaskManager` uses the LLM to produce a structured tree (sequential / parallel / atomic) and executes it.
-
-### Other endpoints
-
-- **GET /api/settings** — Defaults and bounds for the UI (tools list, providers, token/temperature/thinking limits, `agi_mode`, etc.).
-- **GET /api/health** — Liveness.
-- **GET /api/ready** — Readiness (history file usable + provider initialized).
-- **GET /api/screenshots/{filename}** — Serve a PNG from the project `screenshots/` directory (path-safe).
-
----
-
-## Prerequisites
-
-- **Python** 3.10+ (backend).
-- **Node.js** 18+ (frontend and desktop).
-- **API keys / credentials** for at least one LLM provider (OpenRouter and/or AWS Bedrock for Anthropic).
-
----
-
-## Quick start
-
-### 1. Clone and configure
+### 1. Clone & Configure
 
 ```bash
-git clone <repository-url>
-cd Akira
+git clone https://github.com/yourusername/akira-autobot.git
+cd akira-autobot
 ```
 
-Create a `.env` in the **project root** (loaded by `backend/main.py`):
+Create `.env` in the project root:
 
 ```env
-# OpenRouter
-OPENROUTER_API_KEY=sk-or-...
+# Choose your LLM provider
 DEFAULT_MODEL=openrouter
 
-# Optional
-# OPENROUTER_MODEL=anthropic/claude-sonnet-4
-# MAX_TOKENS=131072
-# DEFAULT_TEMPERATURE=0.7
+# OpenRouter (access to 100+ models)
+OPENROUTER_API_KEY=sk-or-...
+OPENROUTER_MODEL=anthropic/claude-sonnet-4
+
+# OR Anthropic via AWS Bedrock
+# DEFAULT_MODEL=anthropic
+# AWS_ACCESS_KEY_ID=...
+# AWS_SECRET_ACCESS_KEY=...
+# AWS_REGION=us-east-1
+# CLAUDE_INFERENCE_PROFILE=anthropic.claude-3-5-sonnet-...
+
+# Optional settings
+PORT=8100
+MAX_TOKENS=131072
+DEFAULT_TEMPERATURE=0.7
+AGI_MODE=1  # Enable memory injection
 ```
 
-For Anthropic via Bedrock:
-
-```env
-DEFAULT_MODEL=anthropic
-AWS_ACCESS_KEY_ID=...
-AWS_SECRET_ACCESS_KEY=...
-AWS_REGION=us-east-1
-CLAUDE_INFERENCE_PROFILE=anthropic.claude-3-5-sonnet-...
-# BEDROCK_ENDPOINT=...   # if using a custom endpoint
-```
-
-### 2. Backend
-
-Default HTTP port is **8000** (override with `PORT` in `.env`).
+### 2. Start Backend
 
 ```bash
 pip install -r backend/requirements.txt
-# Also install FastAPI stack if needed, e.g.:
-# pip install fastapi uvicorn python-dotenv pydantic
-cd <project-root>
-python -m uvicorn backend.server:app --host 0.0.0.0 --port 8000
+python -m uvicorn backend.server:app --host 0.0.0.0 --port 8100
 ```
 
-Ensure `frontend/vite.config.js` **`server.proxy['/api'].target`** matches your backend port (it is set to `http://localhost:8000` in the repo).
-
-**Telegram bot (optional):** With the API already running, set `TELEGRAM_BOT_TOKEN` in `.env`, optionally `TELEGRAM_ALLOWED_USER_IDS` (comma-separated numeric user IDs — strongly recommended), then from the project root:
-
-```bash
-python -m backend.telegram_bot
-```
-
-Messages are sent to `POST /api/chat`. Tools are **off** for Telegram by default; set `TELEGRAM_ENABLE_TOOLS=1` only if you accept tools executing on the machine that runs the API. Use `/new` in Telegram to start a new Akira thread.
-
-### 3. Frontend (web)
+### 3. Start Frontend
 
 ```bash
 cd frontend
@@ -232,93 +323,143 @@ npm install
 npm run dev
 ```
 
-Open the URL Vite prints (often `http://localhost:5173`). The dev server proxies `/api` to the backend.
+Open `http://localhost:5173` - you're ready!
 
-### 4. Desktop (optional)
-
-Backend must be running. See [desktop/README.md](desktop/README.md).
+### 4. Optional: Desktop App
 
 ```bash
-cd desktop
+cd akira-desktop
 npm install
 npm run dev
 ```
 
----
+### 5. Optional: Telegram Bot
 
-## Configuration (environment)
+```bash
+# Add to .env:
+TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_ALLOWED_USER_IDS=123456789  # Your Telegram user ID
 
-| Variable | Description | Example |
-|----------|-------------|--------|
-| `PORT` | Backend listen port | `8000` |
-| `DEFAULT_MODEL` | Default LLM provider | `openrouter`, `anthropic` |
-| `OPENROUTER_API_KEY` | OpenRouter API key | `sk-or-...` |
-| `OPENROUTER_MODEL` | OpenRouter model id | `anthropic/claude-sonnet-4` |
-| `MAX_TOKENS` | Default max output tokens | `131072` |
-| `DEFAULT_TEMPERATURE` | Default sampling temperature | `0.7` |
-| `THINKING_BUDGET_MIN` / `THINKING_BUDGET_MAX` | Thinking token bounds | e.g. `1024`, `128000` |
-| `AGI_MODE` | When truthy, inject memory search into system prompt | `1` / `true` |
-| `AWS_*`, `CLAUDE_INFERENCE_PROFILE`, `BEDROCK_ENDPOINT` | Bedrock / Anthropic | — |
-
-**Frontend:** `VITE_API_URL` — API base when not using the dev proxy. `VITE_BASE_PATH` — e.g. `./` for Electron file URLs.
-
-**Desktop:** `AKIRA_API_URL` — Backend URL (often `http://localhost:8000`).
-
-**Telegram bridge:** `TELEGRAM_BOT_TOKEN` (required to run the bot), `TELEGRAM_ALLOWED_USER_IDS` (optional allowlist), `AKIRA_API_BASE` (default `http://127.0.0.1:8000`), `TELEGRAM_ENABLE_TOOLS` (set to `1` to allow tools; default is off). On locked-down networks, `SSL: CERTIFICATE_VERIFY_FAILED` to Telegram is usually corporate TLS inspection: set `TELEGRAM_SSL_CA_BUNDLE` to a PEM file with your org CA, or as a last resort `TELEGRAM_VERIFY_SSL=0` (insecure). `REQUESTS_CA_BUNDLE` / `SSL_CERT_FILE` are used the same way if they point to a real file.
+# Run:
+python -m backend.telegram_bot
+```
 
 ---
 
-## Project structure
+## Desktop Automation Examples
+
+### Open an app and interact with it
 
 ```
-Akira/
+User: Open Notepad and type "Hello World"
+
+Akira: I'll help with that.
+[Uses windows_uia to find/launch Notepad]
+[Uses desktop_keyboard to type the text]
+Done! Notepad is open with your text.
+```
+
+### Web automation when UIA fails
+
+```
+User: Click the "Submit" button on this web form
+
+Akira: The button isn't accessible via UIA (web app). 
+Let me use vision parsing instead.
+[Uses desktop_ui_parse → get_ui_elements]
+[Identifies button coordinates]
+[Uses desktop_mouse to click]
+Form submitted!
+```
+
+### Complex multi-step automation
+
+```
+User: Take a screenshot of VS Code, find the Explorer panel, 
+and tell me what files are open
+
+Akira: [Uses desktop_screen_query → screenshot]
+[Uses desktop_ui_parse to identify VS Code elements]
+[Analyzes the explorer panel content]
+I can see 3 files open: main.py, utils.py, and README.md
+```
+
+---
+
+## Configuration Reference
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PORT` | Backend port | `8100` |
+| `DEFAULT_MODEL` | LLM provider (`openrouter` / `anthropic`) | `openrouter` |
+| `OPENROUTER_API_KEY` | OpenRouter API key | - |
+| `OPENROUTER_MODEL` | Model to use | `anthropic/claude-sonnet-4` |
+| `MAX_TOKENS` | Max output tokens | `131072` |
+| `DEFAULT_TEMPERATURE` | Sampling temperature | `0.7` |
+| `AGI_MODE` | Enable memory injection | `false` |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token | - |
+| `TELEGRAM_ALLOWED_USER_IDS` | Allowed Telegram users | - |
+
+---
+
+## Project Structure
+
+```
+akira-autobot/
 ├── backend/
-│   ├── main.py                 # FastAPI app, CORS, routes, static mount
-│   ├── akira_system_prompt.md
-│   ├── akira_history.json    # Runtime (gitignored in normal setups)
-│   ├── akira_memory.json     # Long-term memories
-│   ├── api/routers/            # chat, history, task
-│   ├── core/                   # logging, paths, rate_limit, history_store, memory_store, file_access
-│   ├── services/
-│   │   ├── llm_service.py      # Orchestration, tool loop, history, autonomous hook
-│   │   ├── llm_providers.py   # OpenRouter, Anthropic (Bedrock)
-│   │   ├── llm_tools.py       # Discovery, timeouts, call_tool
-│   │   └── task_manager.py    # Plan + execute task tree
-│   ├── tools/                  # Tool modules (TOOL_DEF + call_tool)
-│   ├── telegram_bot.py         # Optional Telegram ↔ /api/chat bridge
-│   ├── tests/
-│   └── scripts/                # e.g. rank_openrouter_models.py
+│   ├── server.py              # FastAPI app entry
+│   ├── akira_system_prompt.md # AI personality & guidelines
+│   ├── api/routers/           # REST endpoints
+│   ├── core/                  # Utilities, stores, rate limiting
+│   ├── services/              # LLM orchestration, task manager
+│   └── tools/                 # Pluggable tool modules
 ├── frontend/
 │   ├── src/
-│   │   ├── api/                # chat, history, settings clients
-│   │   ├── components/         # ChatInput, MessageList, Sidebar, SettingsModal, MermaidChart, …
-│   │   ├── config/             # theme / appearance
-│   │   ├── pages/              # ChatPage, …
-│   │   └── utils/              # voice, sound, …
-│   ├── vite.config.js          # PWA + proxy
-│   └── package.json
-├── desktop/                    # Electron (see desktop/README.md)
-├── .env                        # Not committed
-└── README.md
+│   │   ├── components/        # React components
+│   │   ├── pages/             # Route pages
+│   │   └── api/               # API clients
+│   └── vite.config.js         # PWA + proxy config
+├── akira-desktop/             # Electron app
+├── extension/                 # Chrome extension
+└── .env                       # Configuration (not committed)
 ```
 
 ---
 
-## Development notes
+## Roadmap
 
-- **Adding a tool**: Add `backend/tools/<category>/<name>.py` (pick or create a category folder) with `TOOL_DEF` and `call_tool`; call the `reload_tools` tool or restart the backend.
-- **System prompt**: Edit `backend/akira_system_prompt.md` (or use `LLM_Service` read/write helpers in code). Keep tool names in the prompt aligned with actual tools in `backend/tools/`.
-- **OpenRouter model ranking**: Run `backend/scripts/rank_openrouter_models.py` with `OPENROUTER_API_KEY` set.
-- **Rate limiting**: `backend/core/rate_limit.py` — default 20 requests per minute per client key.
+- [ ] **Linux/macOS desktop automation** - Currently Windows-only for UIA
+- [ ] **Plugin marketplace** - Share and discover community tools
+- [ ] **Multi-agent orchestration** - Spawn specialized sub-agents
+- [ ] **Local LLM support** - Ollama, llama.cpp integration
+- [ ] **Voice-first mode** - Continuous voice conversation
+- [ ] **Mobile app** - React Native client
+
+---
+
+## Contributing
+
+Contributions are welcome! Whether it's:
+
+- **New tools** - Add capabilities to `backend/tools/`
+- **Bug fixes** - Help make Akira more stable
+- **Documentation** - Improve guides and examples
+- **Ideas** - Open an issue to discuss features
 
 ---
 
 ## License
 
-See repository license (e.g. MIT in `desktop/package.json` if applicable). Use of third-party APIs (OpenRouter, Anthropic, AWS) is subject to their terms and pricing.
+MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-## Short summary
+<p align="center">
+  <strong>Akira Autobot</strong> - Not just an assistant, but an evolving partner
+</p>
 
-Akira is a **modular full-stack AI assistant**: **FastAPI** + **SSE** streaming, **multi-provider** LLMs, **sandboxed tools** and **memory**, **task planning**, a **React** chat UI with **markdown**, **Mermaid**, **PWA**, and optional **voice**, **camera**, and **Electron**. Configure providers via `.env`, run the backend and frontend, and extend behavior with new tools under `backend/tools/`.
+<p align="center">
+  <a href="#quick-start">Get Started</a> •
+  <a href="https://github.com/yourusername/akira-autobot/issues">Report Bug</a> •
+  <a href="https://github.com/yourusername/akira-autobot/issues">Request Feature</a>
+</p>

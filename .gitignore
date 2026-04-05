@@ -137,13 +137,12 @@ cython_debug/
 # VS Code
 .vscode/
 
-# Cursor
-.cursor/
-
 # Node
 node_modules/
 
 # Project specific
+.cursor/
+.claude/
 logs/
 screenshots/
 desktop/release/
@@ -154,3 +153,32 @@ backend/akira_history.json
 akira_memory.json
 backend/akira_memory.json
 backend/theme_config.json
+
+# Frontend build
+frontend/dist/
+frontend/dev-dist/
+
+# Desktop app (Electron)
+akira-desktop/dist/
+akira-desktop/release/
+akira-desktop/out/
+akira-desktop/node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE
+.idea/
+
+# OmniParser models (large files)
+**/omniparser_weights/
+**/easyocr_models/
+
+# Temporary screen captures
+**/temp_screenshots/
+*.tmp
+
+# Extension build
+extension/dist/

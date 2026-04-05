@@ -1,0 +1,240 @@
+/* Message list - Dark mode */
+.message-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Individual message */
+.message {
+  display: flex;
+  width: 100%;
+}
+
+.message--user {
+  justify-content: flex-end;
+}
+
+.message--assistant {
+  justify-content: flex-start;
+}
+
+.message__bubble {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  max-width: 85%;
+  overflow: hidden;
+}
+
+.message--user .message__bubble {
+  background: rgba(255, 255, 255, 0.5);
+  color: #1a1a1a;
+  border-bottom-right-radius: 4px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.message--assistant .message__bubble {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--color-text);
+  border-bottom-left-radius: 4px;
+  max-width: 100%;
+  width: 100%;
+}
+
+.message--error .message__bubble {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--color-error);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.message__content {
+  font-size: 14px;
+  line-height: 1.5;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+}
+
+/* Markdown content */
+.message__content--markdown {
+  overflow: hidden;
+  max-width: 100%;
+}
+
+.message__content--markdown p {
+  margin: 0 0 8px 0;
+}
+
+.message__content--markdown p:last-child {
+  margin-bottom: 0;
+}
+
+.message__content--markdown ul,
+.message__content--markdown ol {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.message__content--markdown li {
+  margin: 4px 0;
+}
+
+.message__content--markdown strong {
+  font-weight: 600;
+}
+
+.message__content--markdown em {
+  font-style: italic;
+}
+
+.message__content--markdown a {
+  color: #818cf8;
+  text-decoration: underline;
+}
+
+.message__content--markdown a:hover {
+  color: #a5b4fc;
+}
+
+.message__code-block {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin: 8px 0;
+  overflow-x: auto;
+  max-width: 100%;
+  font-size: 13px;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  border: 1px solid var(--color-border);
+}
+
+.message__inline-code {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 13px;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+}
+
+/* Typing indicator */
+.message__typing {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  height: 20px;
+}
+
+.message__typing-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--color-text-muted);
+  border-radius: 50%;
+  animation: typing-bounce 1.4s ease-in-out infinite;
+}
+
+.message__typing-dot:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.message__typing-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.message__typing-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typing-bounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-4px);
+  }
+}
+
+/* Tool calls */
+.message__tools {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.message__tools-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-bottom: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.message__tools-header:hover {
+  color: var(--color-text);
+}
+
+.message__tools--collapsed .message__tools-header {
+  margin-bottom: 0;
+}
+
+.message__tools-toggle {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.message__tools-toggle:hover {
+  color: var(--color-text);
+}
+
+.message__tool {
+  display: inline-block;
+  padding: 2px 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: 'SF Mono', Monaco, monospace;
+  margin-right: 4px;
+  margin-bottom: 4px;
+  color: #818cf8;
+}
+
+/* Tool results */
+.message__tool-results {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.message__tool-result {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.message__tool-result-name {
+  color: var(--color-text-muted);
+  font-family: 'SF Mono', Monaco, monospace;
+}
+
+.message__tool-result-status {
+  font-size: 10px;
+}

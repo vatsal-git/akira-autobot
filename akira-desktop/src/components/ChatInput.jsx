@@ -1,13 +1,55 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import '../styles/chat-input.css';
 
-function ChatInput({ onSend, disabled, isStreaming, liveMode, onLiveModeToggle }) {
+function ChatInput({ onSend, onStop, disabled, isStreaming, liveMode, onLiveModeToggle, onFocus, onBlur }) {
   const [text, setText] = useState('');
   const [isListening, setIsListening] = useState(false);
   const textareaRef = useRef(null);
   const recognitionRef = useRef(null);
+  const saveTimeoutRef = useRef(null);
+  const isListeningRef = useRef(false);
+  const liveModeRef = useRef(false);
 
-  // Initialize speech recognition
+  // Load draft text on mount
+  useEffect(() => {
+    const loadDraft = async () => {
+      if (window.akira?.getDraftText) {
+        const draft = await window.akira.getDraftText();
+        if (draft) setText(draft);
+      }
+    };
+    loadDraft();
+  }, []);
+
+  // Save draft text with debounce
+  const saveDraft = useCallback((value) => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    saveTimeoutRef.current = setTimeout(() => {
+      window.akira?.setDraftText?.(value);
+    }, 300);
+  }, []);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Keep refs in sync with state
+  useEffect(() => {
+    isListeningRef.current = isListening;
+  }, [isListening]);
+
+  useEffect(() => {
+    liveModeRef.current = liveMode;
+  }, [liveMode]);
+
+  // Initialize speech recognition (once on mount)
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognition) {
@@ -30,7 +72,11 @@ function ChatInput({ onSend, disabled, isStreaming, liveMode, onLiveModeToggle }
         }
 
         if (finalTranscript) {
-          setText(prev => prev + finalTranscript);
+          setText(prev => {
+            const newText = prev + finalTranscript;
+            saveDraft(newText);
+            return newText;
+          });
         }
       };
 
@@ -40,8 +86,8 @@ function ChatInput({ onSend, disabled, isStreaming, liveMode, onLiveModeToggle }
       };
 
       recognition.onend = () => {
-        // Restart if still in live mode and listening
-        if (liveMode && isListening) {
+        // Use refs to get current values (avoiding stale closure)
+        if (liveModeRef.current && isListeningRef.current) {
           try {
             recognition.start();
           } catch (e) {
@@ -60,7 +106,7 @@ function ChatInput({ onSend, disabled, isStreaming, liveMode, onLiveModeToggle }
         recognitionRef.current.stop();
       }
     };
-  }, [liveMode]);
+  }, [saveDraft]);
 
   // Start/stop listening when live mode changes
   useEffect(() => {
@@ -77,6 +123,13 @@ function ChatInput({ onSend, disabled, isStreaming, liveMode, onLiveModeToggle }
     }
   }, [liveMode]);
 
+  // Auto-focus on mount
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  }, []);
+
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -89,7 +142,15 @@ function ChatInput({ onSend, disabled, isStreaming, liveMode, onLiveModeToggle }
     if (text.trim() && !disabled) {
       onSend(text.trim());
       setText('');
+      // Clear draft on send
+      window.akira?.setDraftText?.('');
     }
+  };
+
+  const handleTextChange = (e) => {
+    const value = e.target.value;
+    setText(value);
+    saveDraft(value);
   };
 
   const handleKeyDown = (e) => {
@@ -112,8 +173,10 @@ function ChatInput({ onSend, disabled, isStreaming, liveMode, onLiveModeToggle }
           ref={textareaRef}
           className="chat-input__textarea"
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={handleTextChange}
           onKeyDown={handleKeyDown}
+          onFocus={onFocus}
+          onBlur={onBlur}
           placeholder={liveMode ? "Listening... or type here" : "Ask Akira anything..."}
           disabled={disabled}
           rows={1}
@@ -139,10 +202,11 @@ function ChatInput({ onSend, disabled, isStreaming, liveMode, onLiveModeToggle }
           )}
         </button>
         <button
-          type="submit"
+          type={isStreaming ? "button" : "submit"}
           className="chat-input__send"
-          disabled={disabled || !text.trim()}
-          title="Send message"
+          disabled={!isStreaming && (disabled || !text.trim())}
+          onClick={isStreaming ? onStop : undefined}
+          title={isStreaming ? "Stop generating" : "Send message"}
         >
           {isStreaming ? (
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">

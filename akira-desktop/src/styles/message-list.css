@@ -2,7 +2,7 @@
 .message-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 2px;
   min-height: 0;
   overflow: hidden;
 }
@@ -11,6 +11,7 @@
 .message {
   display: flex;
   width: 100%;
+  margin: 8px 0;
 }
 
 .message--user {
@@ -29,21 +30,23 @@
 }
 
 .message--user .message__bubble {
-  background: rgba(255, 255, 255, 0.5);
-  color: #1a1a1a;
+  background: rgba(40, 40, 45, 0.95);
+  color: #ffffff;
   border-bottom-right-radius: 4px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .message--assistant .message__bubble {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: transparent;
+  border: none;
   color: var(--color-text);
-  border-bottom-left-radius: 4px;
+  padding: 4px 0;
   max-width: 100%;
   width: 100%;
+}
+
+.message--typing .message__bubble {
+  width: auto;
 }
 
 .message--error .message__bubble {
@@ -58,14 +61,53 @@
   border-color: rgba(251, 191, 36, 0.3);
 }
 
-.message__incomplete-notice {
-  margin-top: 10px;
-  padding: 8px 10px;
-  background: rgba(251, 191, 36, 0.15);
-  border: 1px solid rgba(251, 191, 36, 0.3);
-  border-radius: var(--radius-sm);
+.message__incomplete-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-left: 2px;
+}
+
+.message__incomplete-text {
   font-size: 12px;
-  color: #fbbf24;
+  color: var(--color-text-muted);
+  opacity: 0.7;
+}
+
+.message__continue-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  gap: 4px;
+}
+
+.message__continue-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: var(--color-text);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.message__continue-btn:active {
+  background: rgba(255, 255, 255, 0.2);
+  transform: scale(0.97);
+}
+
+.theme-light .message__continue-btn {
+  background: rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.theme-light .message__continue-btn:hover {
+  background: rgba(0, 0, 0, 0.1);
+  border-color: rgba(0, 0, 0, 0.15);
 }
 
 .message__content {
@@ -81,6 +123,7 @@
 .message__content--markdown {
   overflow: hidden;
   max-width: 100%;
+  white-space: normal;
 }
 
 .message__content--markdown p {
@@ -259,14 +302,19 @@
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: var(--color-text-muted);
+  color: #a5b4fc;
   margin-bottom: 6px;
   cursor: pointer;
   user-select: none;
+  font-weight: 500;
 }
 
 .message__thinking-header:hover {
-  color: var(--color-text);
+  color: #c7d2fe;
+}
+
+.message__thinking-header svg {
+  opacity: 0.8;
 }
 
 .message__thinking--collapsed .message__thinking-header {
@@ -292,12 +340,14 @@
 .message__thinking-content {
   font-size: 12px;
   color: var(--color-text-muted);
-  padding: 8px;
-  background: rgba(0, 0, 0, 0.2);
+  padding: 10px 12px;
+  background: rgba(99, 102, 241, 0.08);
   border-radius: 6px;
   white-space: pre-wrap;
-  max-height: 200px;
+  max-height: 300px;
   overflow-y: auto;
+  line-height: 1.5;
+  border-left: 2px solid rgba(99, 102, 241, 0.3);
 }
 
 /* Tool calls */
@@ -379,4 +429,378 @@
 
 .message__tool-result-status {
   font-size: 10px;
+}
+
+/* Trail Item - minimal timeline style for tools, reasoning, agents */
+.trail-item {
+  display: flex;
+  align-items: flex-start;
+  position: relative;
+  padding-left: 20px;
+  min-height: 28px;
+  margin: 0;
+}
+
+.trail-item + .message,
+.message + .trail-item {
+  margin-top: 12px;
+}
+
+.trail-item__line {
+  position: absolute;
+  left: 5px;
+  top: -8px;
+  width: 1px;
+  height: 0;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.trail-item--connected .trail-item__line {
+  height: 16px;
+}
+
+.trail-item__dot {
+  position: absolute;
+  left: 2px;
+  top: 10px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6b7280;
+}
+
+.trail-item__dot--completed {
+  background: #22c55e;
+}
+
+.trail-item__dot--running {
+  background: #eab308;
+}
+
+.trail-item__dot--pending {
+  background: #6b7280;
+}
+
+.trail-item__content {
+  flex: 1;
+  min-width: 0;
+}
+
+.trail-item__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.trail-item__header:hover {
+  opacity: 0.8;
+}
+
+.trail-item__name {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.trail-item__icon {
+  font-size: 12px;
+}
+
+.trail-item__agent {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  opacity: 0.7;
+  margin-left: 4px;
+}
+
+.trail-item__arrow {
+  color: var(--color-text-muted);
+  margin: 0 4px;
+}
+
+.trail-item__chevron {
+  color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  transition: transform 0.15s ease;
+}
+
+.trail-item__chevron--open {
+  transform: rotate(90deg);
+}
+
+.trail-item__dropdown {
+  margin: 4px 0 8px 0;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 6px;
+  border-left: 2px solid rgba(255, 255, 255, 0.1);
+}
+
+.trail-item__section {
+  margin-bottom: 10px;
+}
+
+.trail-item__section:last-child {
+  margin-bottom: 0;
+}
+
+.trail-item__label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin-bottom: 6px;
+  opacity: 0.7;
+}
+
+.trail-item__json {
+  margin: 0;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  color: var(--color-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.trail-item__result {
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--color-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.trail-item__text {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+.trail-item__task-preview {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  opacity: 0.7;
+  margin-top: 2px;
+}
+
+.trail-item__image {
+  max-width: 100%;
+  max-height: 200px;
+  border-radius: 4px;
+  margin-top: 4px;
+}
+
+.trail-item__object {
+  padding-left: 0;
+}
+
+.trail-item__object-entry {
+  margin: 2px 0;
+}
+
+.trail-item__object-key {
+  color: #818cf8;
+  font-family: 'SF Mono', Monaco, monospace;
+  margin-right: 6px;
+}
+
+.trail-item__object-value {
+  color: var(--color-text);
+}
+
+.trail-item__array-item {
+  padding: 2px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.trail-item__array-item:last-child {
+  border-bottom: none;
+}
+
+/* ============ Light Mode Overrides ============ */
+.theme-light .message--user .message__bubble {
+  background: rgba(30, 30, 35, 0.9);
+  color: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.theme-light .message--assistant .message__bubble {
+  background: transparent;
+  border: none;
+}
+
+.theme-light .message__content--markdown a {
+  color: #6366f1;
+}
+
+.theme-light .message__content--markdown a:hover {
+  color: #4f46e5;
+}
+
+.theme-light .message__code-block {
+  background: rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.theme-light .message__code-copy,
+.theme-light .message__code-wrap {
+  background: rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.theme-light .message__code-copy:hover,
+.theme-light .message__code-wrap:hover {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.theme-light .message__inline-code {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.theme-light .message__thinking {
+  border-top: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.theme-light .message__thinking-header {
+  color: #6366f1;
+}
+
+.theme-light .message__thinking-header:hover {
+  color: #4f46e5;
+}
+
+.theme-light .message__thinking-content {
+  background: rgba(99, 102, 241, 0.08);
+  border-left: 2px solid rgba(99, 102, 241, 0.4);
+}
+
+.theme-light .message__tools {
+  border-top: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.theme-light .message__tool {
+  background: rgba(0, 0, 0, 0.08);
+  color: #6366f1;
+}
+
+.theme-light .message__tool-result {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.theme-light .trail-item__line {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.theme-light .trail-item__dot--pending {
+  background: #9ca3af;
+}
+
+.theme-light .trail-item__dropdown {
+  background: rgba(0, 0, 0, 0.04);
+  border-left: 2px solid rgba(0, 0, 0, 0.1);
+}
+
+.theme-light .trail-item__json {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.theme-light .trail-item__result {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.theme-light .trail-item__object-key {
+  color: #6366f1;
+}
+
+.theme-light .trail-item__array-item {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+/* Flash Response Footer (cached responses) - subtle, below bubble */
+.message--cached {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.message__flash-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding-left: 4px;
+  opacity: 0.4;
+  transition: opacity 0.15s;
+}
+
+.message:hover .message__flash-footer {
+  opacity: 0.7;
+}
+
+.message__flash-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #facc15;
+  transition: transform 0.15s ease;
+}
+
+.message:hover .message__flash-icon {
+  transform: scale(1.2);
+}
+
+.message__regenerate-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  opacity: 0;
+}
+
+.message:hover .message__regenerate-btn {
+  opacity: 1;
+}
+
+.message__regenerate-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--color-text);
+  transform: scale(1.1);
+}
+
+.message__regenerate-btn:active {
+  background: rgba(255, 255, 255, 0.15);
+  transform: scale(0.95);
+}
+
+/* Light mode overrides for flash footer */
+.theme-light .message__flash-icon {
+  color: #ca8a04;
+}
+
+.theme-light .message__regenerate-btn:hover {
+  background: rgba(0, 0, 0, 0.08);
 }

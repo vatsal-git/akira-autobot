@@ -6,7 +6,6 @@
   height: 100%;
   background: rgba(30, 30, 30, 0.5);
   border-radius: var(--radius-lg);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.1);
   position: relative;
@@ -155,35 +154,42 @@
   color: var(--color-text);
 }
 
-/* Collapsed ball state */
+/* Collapsed tab state (flush right edge, padding from taskbar) */
 .widget--collapsed {
-  width: 48px;
-  height: 48px;
-  min-width: 48px;
-  min-height: 48px;
-  max-width: 48px;
-  max-height: 48px;
-  border-radius: 50%;
+  width: 24px;
+  height: 60px;
+  min-width: 24px;
+  min-height: 60px;
+  max-width: 24px;
+  max-height: 60px;
+  border-radius: 8px 0 0 8px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  background: #1e1e1e;
-  border: 2px solid #3a3a3a;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  background: rgba(30, 30, 30, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-right: none;
   overflow: hidden;
+  transition: all var(--transition);
 }
 
 .widget--collapsed:hover {
-  border-color: #505050;
+  background: rgba(40, 40, 40, 0.98);
+  border-color: rgba(255, 255, 255, 0.25);
 }
 
-.widget__collapsed-text {
-  font-family: "Bitcount Grid Double", "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 1.1rem;
-  font-weight: 500;
-  color: #ffffff;
-  user-select: none;
+.widget--collapsed:hover .widget__collapsed-arrow {
+  transform: translateX(-2px);
+}
+
+.widget__collapsed-arrow {
+  color: rgba(255, 255, 255, 0.7);
+  transition: transform var(--transition), color var(--transition);
+}
+
+.widget--collapsed:hover .widget__collapsed-arrow {
+  color: rgba(255, 255, 255, 0.95);
 }
 
 /* Hovered state - more opaque */
@@ -221,6 +227,35 @@
 .widget__btn--history:hover {
   color: #3b82f6;
   background: rgba(59, 130, 246, 0.1);
+}
+
+/* Copy chat button */
+.widget__btn--copy {
+  color: var(--color-text-muted);
+  transition: all var(--transition);
+}
+
+.widget__btn--copy:hover {
+  color: #a78bfa;
+  background: rgba(167, 139, 250, 0.1);
+}
+
+.widget__btn--copied {
+  color: #22c55e !important;
+  background: rgba(34, 197, 94, 0.15) !important;
+  animation: copy-tick 0.3s ease-out;
+}
+
+@keyframes copy-tick {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 /* Chat history panel */
@@ -416,4 +451,108 @@
     filter: none;
     opacity: 0.85;
   }
+}
+
+/* ============ Light Mode Overrides ============ */
+.theme-light .widget {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.theme-light .widget__header {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.theme-light .widget__btn:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.theme-light .widget__input-area {
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.theme-light .widget--collapsed {
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-right: none;
+}
+
+.theme-light .widget--collapsed:hover {
+  background: rgba(255, 255, 255, 0.98);
+  border-color: rgba(0, 0, 0, 0.25);
+}
+
+.theme-light .widget__collapsed-arrow {
+  color: rgba(0, 0, 0, 0.5);
+}
+
+.theme-light .widget--collapsed:hover .widget__collapsed-arrow {
+  color: rgba(0, 0, 0, 0.8);
+}
+
+/* Light mode tubelight: dark glow instead of white */
+.theme-light .widget__title,
+.theme-light .widget__collapsed-text,
+.theme-light .widget__empty-title {
+  color: #1a1a1a;
+}
+
+@keyframes tubelight-flicker-light {
+  0% {
+    opacity: 0.3;
+    color: #999;
+    text-shadow: none;
+  }
+  10% {
+    opacity: 0.1;
+    color: #bbb;
+    text-shadow: none;
+  }
+  20% {
+    opacity: 0.8;
+    color: #1a1a1a;
+    text-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+  }
+  30% {
+    opacity: 0.2;
+    color: #aaa;
+    text-shadow: none;
+  }
+  50% {
+    opacity: 0.9;
+    color: #1a1a1a;
+    text-shadow: 0 0 15px rgba(0, 0, 0, 0.35);
+  }
+  60% {
+    opacity: 0.4;
+    color: #888;
+    text-shadow: none;
+  }
+  80% {
+    opacity: 0.95;
+    color: #1a1a1a;
+    text-shadow: 0 0 20px rgba(0, 0, 0, 0.25);
+  }
+  100% {
+    opacity: 1;
+    color: #1a1a1a;
+    text-shadow:
+      0 0 10px rgba(0, 0, 0, 0.25),
+      0 0 20px rgba(0, 0, 0, 0.15),
+      0 0 30px rgba(0, 0, 0, 0.1);
+  }
+}
+
+.theme-light .widget__title--tubelight-boot,
+.theme-light .widget__collapsed-text.widget__title--tubelight-boot,
+.theme-light .widget__empty-title.widget__title--tubelight-boot {
+  animation-name: tubelight-flicker-light;
+}
+
+.theme-light .widget__title--tubelight-reply,
+.theme-light .widget__collapsed-text.widget__title--tubelight-reply,
+.theme-light .widget__empty-title.widget__title--tubelight-reply {
+  animation-name: tubelight-flicker-light;
 }

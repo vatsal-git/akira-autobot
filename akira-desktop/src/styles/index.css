@@ -1,6 +1,6 @@
 /* Font imported via index.html from Google Fonts */
 
-/* Base styles - Always Dark Mode */
+/* Base styles - Dark Mode (default) */
 :root {
   --color-bg: transparent;
   --color-surface: rgba(20, 20, 20, 0.85);
@@ -25,6 +25,25 @@
   --transition: 0.2s cubic-bezier(0.22, 1, 0.36, 1);
   --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-brand: 'Bitcount Grid Double', 'IBM Plex Mono', ui-monospace, monospace;
+}
+
+/* Light Mode */
+:root.theme-light {
+  --color-bg: transparent;
+  --color-surface: rgba(255, 255, 255, 0.92);
+  --color-surface-hover: rgba(245, 245, 245, 0.95);
+  --color-surface-solid: rgba(250, 250, 250, 0.98);
+  --color-text: #1a1a1a;
+  --color-text-muted: #666;
+  --color-primary: #1a1a1a;
+  --color-primary-hover: #333;
+  --color-border: rgba(0, 0, 0, 0.1);
+  --color-error: #dc2626;
+  --color-success: #16a34a;
+
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.08);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.16);
 }
 
 * {
@@ -113,4 +132,13 @@ a:hover {
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.3);
+}
+
+/* Light mode scrollbar */
+.theme-light ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.theme-light ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
 }

@@ -1,6 +1,6 @@
 /**
- * System Tools
- * execute_command
+ * Execute Command Tool
+ * execute_command - Execute a shell command and return output
  */
 
 const { exec } = require('child_process');
@@ -63,13 +63,6 @@ function isCommandSafe(command) {
   return { safe: true };
 }
 
-// Reload callback - will be set by the main process
-let reloadCallback = null;
-
-function setReloadCallback(callback) {
-  reloadCallback = callback;
-}
-
 const definitions = [
   {
     name: 'execute_command',
@@ -91,14 +84,6 @@ const definitions = [
         },
       },
       required: ['command'],
-    },
-  },
-  {
-    name: 'reload_tools',
-    description: 'Reload tools from the tools directory. Call this after creating or editing a tool module so Akira can use the new or updated tool without restarting.',
-    input_schema: {
-      type: 'object',
-      properties: {},
     },
   },
 ];
@@ -167,27 +152,4 @@ const handlers = {
   },
 };
 
-// Add reload_tools handler
-handlers.reload_tools = async function(input) {
-  if (!reloadCallback) {
-    return {
-      success: false,
-      error: 'Reload not available (no callback configured).',
-    };
-  }
-
-  try {
-    await reloadCallback();
-    return {
-      success: true,
-      message: 'Tools reloaded. New tools are now available.',
-    };
-  } catch (error) {
-    return {
-      success: false,
-      error: error.message || String(error),
-    };
-  }
-};
-
-module.exports = { definitions, handlers, setReloadCallback };
+module.exports = { definitions, handlers };

@@ -1,6 +1,6 @@
 {
   "name": "akira-desktop",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "Akira AI Assistant - Always-on-top desktop widget",
   "main": "electron/main.js",
   "type": "commonjs",
@@ -8,7 +8,7 @@
     "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
     "dev:vite": "vite",
     "dev:electron": "wait-on http://localhost:1420 && electron .",
-    "build": "vite build && electron-packager . Akira --platform=win32 --arch=x64 --out=release --overwrite --ignore=node_modules/electron-builder --ignore=\\.git",
+    "build": "node scripts/build.js",
     "build:vite": "vite build",
     "preview": "vite preview"
   },
@@ -36,6 +36,7 @@
     }
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1037.0",
     "electron-store": "^8.1.0",
     "framer-motion": "^11.0.0",
     "node-fetch": "^3.3.2",
@@ -43,6 +44,7 @@
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
     "remark-gfm": "^4.0.0",
+    "tesseract.js": "^7.0.0",
     "uuid": "^9.0.0"
   },
   "devDependencies": {

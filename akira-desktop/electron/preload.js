@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld('akira', {
   setApiKey: (key) => ipcRenderer.invoke('set-api-key', key),
   getApiKey: () => ipcRenderer.invoke('get-api-key'),
 
+  // Tools
+  getToolsWithCategories: () => ipcRenderer.invoke('get-tools-with-categories'),
+
   // Window control
   switchCorner: (corner) => ipcRenderer.invoke('switch-corner', corner),
   toggleWidget: () => ipcRenderer.invoke('toggle-widget'),
@@ -22,16 +25,39 @@ contextBridge.exposeInMainWorld('akira', {
   toggleMaximize: () => ipcRenderer.invoke('toggle-maximize'),
   isMaximized: () => ipcRenderer.invoke('is-maximized'),
 
-  // OpenRouter
+  // Provider management
+  getProviders: () => ipcRenderer.invoke('get-providers'),
+  getProviderApiKey: (providerId) => ipcRenderer.invoke('get-provider-api-key', providerId),
+  setProviderApiKey: (providerId, apiKey) => ipcRenderer.invoke('set-provider-api-key', { providerId, apiKey }),
+  getSelectedProvider: () => ipcRenderer.invoke('get-selected-provider'),
+  setSelectedProvider: (providerId) => ipcRenderer.invoke('set-selected-provider', providerId),
+  getSelectedModel: () => ipcRenderer.invoke('get-selected-model'),
+  setSelectedModel: (model) => ipcRenderer.invoke('set-selected-model', model),
+  // Bedrock credentials
+  getBedrockCredentials: () => ipcRenderer.invoke('get-bedrock-credentials'),
+  setBedrockCredentials: (credentials) => ipcRenderer.invoke('set-bedrock-credentials', credentials),
+
+  // Model-specific settings
+  getModelSettings: (modelId) => ipcRenderer.invoke('get-model-settings', modelId),
+  setModelSettings: (modelId, settings) => ipcRenderer.invoke('set-model-settings', modelId, settings),
+
+  // Legacy: OpenRouter
   testConnection: (apiKey) => ipcRenderer.invoke('test-connection', apiKey),
-  getModels: () => ipcRenderer.invoke('get-models'),
-  refreshModels: () => ipcRenderer.invoke('refresh-models'),
+
+  // Draft text persistence
+  getDraftText: () => ipcRenderer.invoke('get-draft-text'),
+  setDraftText: (text) => ipcRenderer.invoke('set-draft-text', text),
 
   // Chat (uses send/on for streaming)
-  sendMessage: (message, chatId, model) => {
-    ipcRenderer.send('send-message', { message, chatId, model });
+  sendMessage: (message, chatId, skipCache = false) => {
+    ipcRenderer.send('send-message', { message, chatId, skipCache });
   },
+  cancelGeneration: (chatId) => ipcRenderer.invoke('cancel-generation', chatId),
   clearChat: (chatId) => ipcRenderer.invoke('clear-chat', chatId),
+
+  // Cache management
+  getCacheStats: () => ipcRenderer.invoke('get-cache-stats'),
+  clearResponseCache: () => ipcRenderer.invoke('clear-response-cache'),
 
   // Chat history
   getChatHistory: () => ipcRenderer.invoke('get-chat-history'),
@@ -62,5 +88,14 @@ contextBridge.exposeInMainWorld('akira', {
     const handler = (event, collapsed) => callback(collapsed);
     ipcRenderer.on('collapsed-changed', handler);
     return () => ipcRenderer.removeListener('collapsed-changed', handler);
-  }
+  },
+
+  onWidgetModeChanged: (callback) => {
+    const handler = (event, mode) => callback(mode);
+    ipcRenderer.on('widget-mode-changed', handler);
+    return () => ipcRenderer.removeListener('widget-mode-changed', handler);
+  },
+
+  // Reset Akira
+  resetAkira: () => ipcRenderer.invoke('reset-akira')
 });

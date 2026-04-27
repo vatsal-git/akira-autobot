@@ -97,3 +97,30 @@
     box-shadow: 0 0 0 6px rgba(239, 68, 68, 0);
   }
 }
+
+/* ============ Light Mode Overrides ============ */
+.theme-light .chat-input__wrapper {
+  background: rgba(0, 0, 0, 0.03);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.theme-light .chat-input__wrapper:focus-within {
+  border-color: rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.theme-light .chat-input__send {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.theme-light .chat-input__send:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.theme-light .chat-input__live {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.theme-light .chat-input__live:hover {
+  background: rgba(0, 0, 0, 0.12);
+}

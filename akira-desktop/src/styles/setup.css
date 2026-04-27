@@ -33,7 +33,6 @@
   font-weight: 700;
   font-size: 24px;
   margin: 0 auto 16px;
-  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
 }
 
 .setup__title {
@@ -74,8 +73,40 @@
   color: #a5b4fc;
 }
 
+.setup__tutorial-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #ff4444;
+  text-decoration: none;
+  background: rgba(255, 68, 68, 0.1);
+  border-radius: var(--radius-sm);
+  transition: all var(--transition);
+}
+
+.setup__tutorial-link:hover {
+  background: rgba(255, 68, 68, 0.15);
+  color: #ff6666;
+}
+
+.setup__tutorial-link svg {
+  flex-shrink: 0;
+}
+
 .setup__input-group {
   margin-bottom: 16px;
+  position: relative;
+}
+
+.setup__char-count {
+  position: absolute;
+  right: 10px;
+  top: 38px;
+  font-size: 11px;
+  color: var(--color-text-muted);
 }
 
 .setup__label {
@@ -160,11 +191,9 @@
 .setup__btn--primary {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
-  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
 }
 
 .setup__btn--primary:hover:not(:disabled) {
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.5);
   transform: translateY(-1px);
 }
 
@@ -202,4 +231,37 @@
 
 .setup__step-dot--active {
   background: #667eea;
+}
+
+/* ============ Light Mode Overrides ============ */
+.theme-light .setup__link {
+  color: #6366f1;
+}
+
+.theme-light .setup__link:hover {
+  color: #4f46e5;
+}
+
+.theme-light .setup__input {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.theme-light .setup__input:focus {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.theme-light .setup__select {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.theme-light .setup__select option {
+  background: #fff;
+}
+
+.theme-light .setup__btn--secondary {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.theme-light .setup__btn--secondary:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.12);
 }

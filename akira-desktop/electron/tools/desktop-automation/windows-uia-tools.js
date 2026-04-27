@@ -25,79 +25,142 @@ function truncate(s, n = MAX_NAME_LEN) {
 }
 
 /**
- * Execute PowerShell command
+ * Execute PowerShell command with better error handling
  */
 async function runPowerShell(script, timeout = 30000) {
   if (!IS_WINDOWS) {
     throw new Error('windows_uia is only available on Windows');
   }
 
-  const { stdout, stderr } = await execPromise(
-    `powershell -NoProfile -ExecutionPolicy Bypass -Command "${script.replace(/"/g, '\\"')}"`,
-    { timeout, maxBuffer: 10 * 1024 * 1024 }
-  );
+  try {
+    const { stdout, stderr } = await execPromise(
+      `powershell -NoProfile -ExecutionPolicy Bypass -Command "${script.replace(/"/g, '\\"')}"`,
+      { timeout, maxBuffer: 10 * 1024 * 1024 }
+    );
 
-  return { stdout: stdout.trim(), stderr: stderr.trim() };
+    if (stderr && stderr.trim()) {
+      console.warn('[windows-uia] PowerShell stderr:', stderr.trim());
+    }
+
+    return { stdout: stdout.trim(), stderr: stderr.trim() };
+  } catch (error) {
+    console.error('[windows-uia] PowerShell error:', error.message);
+    if (error.stderr) {
+      console.error('[windows-uia] PowerShell stderr:', error.stderr);
+    }
+    throw new Error(`PowerShell failed: ${error.message}${error.stderr ? ' - ' + error.stderr : ''}`);
+  }
 }
 
 /**
  * List top-level windows using UI Automation
  */
 async function listWindows() {
-  const script = `
-    Add-Type -AssemblyName UIAutomationClient
-    Add-Type -AssemblyName UIAutomationTypes
+  // First, try a simple diagnostic to check if we can access the desktop
+  try {
+    const diagScript = `
+      Add-Type -AssemblyName UIAutomationClient
+      Add-Type -AssemblyName UIAutomationTypes
 
-    $root = [System.Windows.Automation.AutomationElement]::RootElement
-    $condition = [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-      [System.Windows.Automation.ControlType]::Window
-    )
+      $root = [System.Windows.Automation.AutomationElement]::RootElement
+      if ($root -eq $null) {
+        Write-Output '{"error":"Cannot access UI Automation root element"}'
+        exit
+      }
 
-    $windows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)
+      $condition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::Window
+      )
 
-    $results = @()
-    $count = 0
-    foreach ($w in $windows) {
-      if ($count -ge ${MAX_WINDOWS}) { break }
-      try {
-        $name = $w.Current.Name
-        $handle = $w.Current.NativeWindowHandle
-        $className = $w.Current.ClassName
-        $processId = $w.Current.ProcessId
+      $windows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)
 
-        if ($handle -eq 0) { continue }
+      $results = @()
+      $count = 0
+      foreach ($w in $windows) {
+        if ($count -ge ${MAX_WINDOWS}) { break }
+        try {
+          $name = $w.Current.Name
+          $handle = $w.Current.NativeWindowHandle
+          $className = $w.Current.ClassName
+          $processId = $w.Current.ProcessId
 
-        $results += [PSCustomObject]@{
-          title = $name
-          handle = $handle
-          class_name = $className
-          process_id = $processId
+          if ($handle -eq 0) { continue }
+
+          $results += [PSCustomObject]@{
+            title = $name
+            handle = $handle
+            class_name = $className
+            process_id = $processId
+          }
+          $count++
+        } catch {}
+      }
+
+      if ($results.Count -eq 0) {
+        # Try alternative method using Get-Process
+        $procs = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 }
+        foreach ($p in $procs) {
+          if ($results.Count -ge ${MAX_WINDOWS}) { break }
+          $results += [PSCustomObject]@{
+            title = $p.MainWindowTitle
+            handle = [int64]$p.MainWindowHandle
+            class_name = ""
+            process_id = $p.Id
+          }
         }
-        $count++
+      }
+
+      ConvertTo-Json -InputObject $results -Compress
+    `;
+
+    const { stdout, stderr } = await runPowerShell(diagScript);
+
+    // Check for error response
+    if (stdout.includes('"error"')) {
+      try {
+        const errObj = JSON.parse(stdout);
+        return {
+          windows: [],
+          count: 0,
+          error: errObj.error,
+          suggestion: 'Ensure the app is running in an interactive desktop session'
+        };
       } catch {}
     }
 
-    ConvertTo-Json -InputObject $results -Compress
-  `;
+    let windows = [];
+    try {
+      windows = JSON.parse(stdout || '[]');
+    } catch {
+      windows = [];
+    }
 
-  const { stdout } = await runPowerShell(script);
-  let windows = [];
-  try {
-    windows = JSON.parse(stdout || '[]');
-  } catch {
-    windows = [];
+    const result = {
+      windows: windows.map(w => ({
+        title: truncate(w.title),
+        handle: w.handle,
+        class_name: truncate(w.class_name),
+        process_id: w.process_id,
+      })),
+      count: windows.length,
+    };
+
+    // Add diagnostic info if no windows found
+    if (windows.length === 0) {
+      result.warning = 'No windows found. This may indicate: (1) Running in a service/non-interactive context, (2) UI Automation permissions issue, (3) No visible windows on the desktop.';
+    }
+
+    return result;
+
+  } catch (error) {
+    return {
+      windows: [],
+      count: 0,
+      error: `Failed to list windows: ${error.message}`,
+      suggestion: 'Check if the app has permissions to access UI Automation'
+    };
   }
-
-  return {
-    windows: windows.map(w => ({
-      title: truncate(w.title),
-      handle: w.handle,
-      class_name: truncate(w.class_name),
-      process_id: w.process_id,
-    })),
-    count: windows.length,
-  };
 }
 
 /**

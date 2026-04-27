@@ -2,6 +2,133 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import '../styles/message-list.css';
+import { AgentActivityChip, AgentDelegationChip } from './AgentActivityChip';
+
+// Helper to truncate long strings
+function truncateString(str, maxLength = 500) {
+  if (typeof str !== 'string') return str;
+  if (str.length <= maxLength) return str;
+  return str.slice(0, maxLength) + '...';
+}
+
+// Helper to detect and render base64 images
+function renderValue(value, depth = 0) {
+  if (depth > 3) return JSON.stringify(value);
+
+  if (typeof value === 'string') {
+    // Check for base64 image
+    const base64Match = value.match(/^data:image\/(png|jpeg|jpg|gif|webp);base64,/);
+    if (base64Match || (value.length > 100 && /^[A-Za-z0-9+/=]+$/.test(value.slice(0, 100)))) {
+      const src = base64Match ? value : `data:image/png;base64,${value}`;
+      return <img src={src} alt="Tool output" className="trail-item__image" />;
+    }
+    return truncateString(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item, i) => (
+      <div key={i} className="trail-item__array-item">
+        {renderValue(item, depth + 1)}
+      </div>
+    ));
+  }
+
+  if (typeof value === 'object' && value !== null) {
+    // Flatten nested result: if object has success:true and a result object, show result contents directly
+    if (value.success === true && value.result && typeof value.result === 'object') {
+      return renderValue(value.result, depth);
+    }
+
+    return (
+      <div className="trail-item__object">
+        {Object.entries(value).map(([key, val]) => (
+          <div key={key} className="trail-item__object-entry">
+            <span className="trail-item__object-key">{key}:</span>
+            <span className="trail-item__object-value">{renderValue(val, depth + 1)}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return String(value);
+}
+
+// Reasoning chip component (minimal trail style)
+function ReasoningChip({ reasoning, isConnected }) {
+  const [expanded, setExpanded] = useState(false);
+  const isActive = reasoning.status === 'active';
+  const dotClass = isActive ? 'trail-item__dot--running' : 'trail-item__dot--completed';
+
+  return (
+    <div className={`trail-item ${isConnected ? 'trail-item--connected' : ''}`}>
+      <div className="trail-item__line" />
+      <div className={`trail-item__dot ${dotClass}`} />
+      <div className="trail-item__content">
+        <div className="trail-item__header" onClick={() => setExpanded(!expanded)}>
+          <span className="trail-item__name">
+            {isActive ? 'Thinking...' : 'Thoughts'}
+          </span>
+          <span className={`trail-item__chevron ${expanded ? 'trail-item__chevron--open' : ''}`}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+          </span>
+        </div>
+        {expanded && (
+          <div className="trail-item__dropdown">
+            <div className="trail-item__text">
+              {reasoning.content?.trim()}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Tool call chip component (minimal trail style)
+function ToolCallChip({ tool, isConnected }) {
+  const [expanded, setExpanded] = useState(false);
+  const isRunning = tool.status === 'running';
+  const dotClass = isRunning ? 'trail-item__dot--running' : 'trail-item__dot--completed';
+
+  return (
+    <div className={`trail-item ${isConnected ? 'trail-item--connected' : ''}`}>
+      <div className="trail-item__line" />
+      <div className={`trail-item__dot ${dotClass}`} />
+      <div className="trail-item__content">
+        <div className="trail-item__header" onClick={() => setExpanded(!expanded)}>
+          <span className="trail-item__name">
+            {tool.name}
+            {tool.agent && <span className="trail-item__agent">({tool.agent})</span>}
+          </span>
+          <span className={`trail-item__chevron ${expanded ? 'trail-item__chevron--open' : ''}`}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+          </span>
+        </div>
+        {expanded && (
+          <div className="trail-item__dropdown">
+            <div className="trail-item__section">
+              <span className="trail-item__label">Input</span>
+              <pre className="trail-item__json">{JSON.stringify(tool.input, null, 2)}</pre>
+            </div>
+            {tool.result && (
+              <div className="trail-item__section">
+                <span className="trail-item__label">Output</span>
+                <div className="trail-item__result">
+                  {renderValue(tool.result)}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function CodeBlock({ className, children, ...props }) {
   const [copied, setCopied] = useState(false);
@@ -66,46 +193,97 @@ function CodeBlock({ className, children, ...props }) {
   );
 }
 
-function MessageList({ messages, isStreaming }) {
-  // Only render user and assistant messages, skip empty assistant messages (from tool calls)
-  // But keep the last assistant message if streaming (for typing indicator)
-  const displayMessages = messages.filter((m, idx) => {
+function MessageList({ messages, isStreaming, onRegenerate, onContinue }) {
+  // Render user, assistant, tool, reasoning, and agent messages in chronological order
+  // Skip empty assistant messages (they shouldn't exist in the new flow, but just in case)
+  const displayMessages = messages.filter((m) => {
+    if (m.type === 'tool') return true;
+    if (m.type === 'reasoning') return true;
+    if (m.type === 'agent') return true;
+    if (m.type === 'delegation') return true;
     if (m.role === 'user') return true;
     if (m.role === 'assistant') {
-      const hasContent = m.content && m.content.trim().length > 0;
-      const isLastMessage = idx === messages.length - 1;
-      // Keep if has content, OR if it's the last message and we're streaming (typing indicator)
-      return hasContent || (isLastMessage && isStreaming);
+      // Keep only if has content
+      return m.content && m.content.trim().length > 0;
     }
     return false;
   });
 
+  // Helper to check if a message is a trail item (tool, reasoning, agent, delegation)
+  const isTrailItem = (m) => m && (m.type === 'tool' || m.type === 'reasoning' || m.type === 'agent' || m.type === 'delegation');
+
+  // Create index mapping from display index to original messages index
+  const getOriginalIndex = (displayIndex) => {
+    let count = -1;
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      if (m.type === 'tool' || m.type === 'reasoning' || m.type === 'agent' ||
+          m.type === 'delegation' || m.role === 'user' ||
+          (m.role === 'assistant' && m.content && m.content.trim().length > 0)) {
+        count++;
+        if (count === displayIndex) return i;
+      }
+    }
+    return -1;
+  };
+
+  // Check if we need to show a standalone typing indicator
+  // (streaming but last displayable item is not an assistant message)
+  const lastDisplay = displayMessages[displayMessages.length - 1];
+  const showTypingIndicator = isStreaming && lastDisplay && lastDisplay.role !== 'assistant';
+
   return (
     <div className="message-list">
-      {displayMessages.map((message, index) => (
-        <Message
-          key={index}
-          message={message}
-          isLast={index === displayMessages.length - 1}
-          isStreaming={isStreaming && index === displayMessages.length - 1 && message.role === 'assistant'}
-        />
-      ))}
+      {displayMessages.map((message, index) => {
+        const prevMessage = displayMessages[index - 1];
+        const isConnected = isTrailItem(message) && isTrailItem(prevMessage);
+
+        return message.type === 'tool' ? (
+          <ToolCallChip key={message.toolId || index} tool={message} isConnected={isConnected} />
+        ) : message.type === 'reasoning' ? (
+          <ReasoningChip key={`reasoning-${index}`} reasoning={message} isConnected={isConnected} />
+        ) : message.type === 'agent' ? (
+          <AgentActivityChip key={`agent-${index}`} activity={message} isConnected={isConnected} />
+        ) : message.type === 'delegation' ? (
+          <AgentDelegationChip key={`delegation-${index}`} delegation={message} isConnected={isConnected} />
+        ) : (
+          <Message
+            key={index}
+            message={message}
+            isLast={index === displayMessages.length - 1}
+            isStreaming={isStreaming && index === displayMessages.length - 1 && message.role === 'assistant'}
+            onRegenerate={message.cached && onRegenerate ? () => onRegenerate(getOriginalIndex(index)) : null}
+            onContinue={message.incomplete && onContinue ? () => onContinue(getOriginalIndex(index)) : null}
+          />
+        );
+      })}
+      {showTypingIndicator && (
+        <div className="message message--assistant message--typing">
+          <div className="message__content">
+            <span className="message__typing">
+              <span className="message__typing-dot" />
+              <span className="message__typing-dot" />
+              <span className="message__typing-dot" />
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function Message({ message, isLast, isStreaming }) {
+function Message({ message, isLast, isStreaming, onRegenerate, onContinue }) {
   const isUser = message.role === 'user';
   const isError = message.error;
   const isIncomplete = message.incomplete;
-  const [toolsCollapsed, setToolsCollapsed] = useState(true);
-  const [thinkingCollapsed, setThinkingCollapsed] = useState(true);
+  const isTyping = !isUser && !message.content && isStreaming;
+  const isCached = message.cached === true;
 
   return (
     <div
       className={`message ${isUser ? 'message--user' : 'message--assistant'} ${
         isError ? 'message--error' : ''
-      } ${isIncomplete ? 'message--incomplete' : ''}`}
+      } ${isIncomplete ? 'message--incomplete' : ''} ${isTyping ? 'message--typing' : ''} ${isCached ? 'message--cached' : ''}`}
     >
       <div className="message__bubble">
         {isUser ? (
@@ -147,8 +325,19 @@ function Message({ message, isLast, isStreaming }) {
                   {message.content}
                 </ReactMarkdown>
                 {isIncomplete && (
-                  <div className="message__incomplete-notice">
-                    ⚠ Response interrupted: {message.errorMessage || 'Connection error'}
+                  <div className="message__incomplete-footer">
+                    <span className="message__incomplete-text">Response stopped</span>
+                    {onContinue && (
+                      <button
+                        className="message__continue-btn"
+                        onClick={onContinue}
+                        title="Continue generating"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M8 5v14l11-7z" />
+                        </svg>
+                      </button>
+                    )}
                   </div>
                 )}
               </>
@@ -161,66 +350,29 @@ function Message({ message, isLast, isStreaming }) {
             ) : null}
           </div>
         )}
-
-        {/* Thinking - collapsible */}
-        {message.thinking && (
-          <div className={`message__thinking ${thinkingCollapsed ? 'message__thinking--collapsed' : ''}`}>
-            <div className="message__thinking-header" onClick={() => setThinkingCollapsed(!thinkingCollapsed)}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10" />
-                <path d="M12 16v-4M12 8h.01" />
-              </svg>
-              <span>Thinking</span>
-              <button className="message__thinking-toggle" title={thinkingCollapsed ? 'Expand' : 'Collapse'}>
-                {thinkingCollapsed ? '+' : '−'}
-              </button>
-            </div>
-            {!thinkingCollapsed && (
-              <div className="message__thinking-content">
-                {message.thinking}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Tool calls and results - collapsible */}
-        {((message.toolCalls && message.toolCalls.length > 0) || (message.toolResults && message.toolResults.length > 0)) && (
-          <div className={`message__tools ${toolsCollapsed ? 'message__tools--collapsed' : ''}`}>
-            <div className="message__tools-header" onClick={() => setToolsCollapsed(!toolsCollapsed)}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-              </svg>
-              <span>
-                {isStreaming && message.isTooling
-                  ? `Using tool: ${(() => {
-                      const last = message.toolCalls?.[message.toolCalls.length - 1];
-                      return typeof last === 'string' ? last : last?.function?.name || '...';
-                    })()}`
-                  : 'Tools Used:'}
-              </span>
-              <button className="message__tools-toggle" title={toolsCollapsed ? 'Expand' : 'Collapse'}>
-                {toolsCollapsed ? '+' : '−'}
-              </button>
-            </div>
-            {!toolsCollapsed && (
-              <>
-                {message.toolResults && message.toolResults.length > 0 && (
-                  <div className="message__tool-results">
-                    {message.toolResults.map((tr, i) => (
-                      <div key={i} className="message__tool-result">
-                        <span className="message__tool-result-name">{tr.tool}</span>
-                        <span className="message__tool-result-status">
-                          {tr.result?.success ? '✓' : '✗'}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
       </div>
+      {/* Flash response indicator - outside bubble, subtle */}
+      {isCached && !isStreaming && (
+        <div className="message__flash-footer">
+          <span className="message__flash-icon" title="Flash response (cached)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+            </svg>
+          </span>
+          {onRegenerate && (
+            <button
+              className="message__regenerate-btn"
+              onClick={onRegenerate}
+              title="Regenerate"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M23 4v6h-6M1 20v-6h6" />
+                <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
+              </svg>
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

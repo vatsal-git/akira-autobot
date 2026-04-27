@@ -1,6 +1,6 @@
 /**
- * Web Tools
- * web_search, fetch_webpage
+ * Web Search Tool
+ * web_search - Search the web using DuckDuckGo
  */
 
 const https = require('https');
@@ -34,14 +34,6 @@ function htmlToText(html) {
   text = text.replace(/[ \t]+/g, ' ');
 
   return text.trim();
-}
-
-/**
- * Extract title from HTML
- */
-function extractTitle(html) {
-  const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  return match ? match[1].trim() : '';
 }
 
 /**
@@ -117,28 +109,6 @@ const definitions = [
       required: ['query'],
     },
   },
-  {
-    name: 'fetch_webpage',
-    description: 'Fetch and extract content from a webpage URL. Returns title and text content.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        url: {
-          type: 'string',
-          description: 'The URL of the webpage to fetch',
-        },
-        extract_main_content: {
-          type: 'boolean',
-          description: 'Extract just text content (true) or return full HTML (false). Default: true',
-        },
-        max_length: {
-          type: 'integer',
-          description: 'Maximum content length to return (default: 50000)',
-        },
-      },
-      required: ['url'],
-    },
-  },
 ];
 
 const handlers = {
@@ -191,54 +161,6 @@ const handlers = {
       };
     } catch (error) {
       return { success: false, error: error.message, query };
-    }
-  },
-
-  async fetch_webpage(input) {
-    const url = (input.url || '').trim();
-    const extractContent = input.extract_main_content !== false;
-    const maxLength = input.max_length || 50000;
-
-    if (!url) {
-      return { success: false, error: 'URL is required' };
-    }
-
-    // Validate URL
-    try {
-      new URL(url);
-    } catch {
-      return { success: false, error: 'Invalid URL format' };
-    }
-
-    try {
-      const response = await fetchUrl(url, { timeout: 15000 });
-
-      if (response.statusCode !== 200) {
-        return { success: false, error: `HTTP status ${response.statusCode}`, url };
-      }
-
-      const html = response.data;
-      const title = extractTitle(html);
-
-      let content;
-      if (extractContent) {
-        content = htmlToText(html);
-        if (content.length > maxLength) {
-          content = content.substring(0, maxLength) + '\n\n[Content truncated...]';
-        }
-      } else {
-        content = html.substring(0, maxLength);
-      }
-
-      return {
-        success: true,
-        title,
-        content,
-        url,
-        content_type: response.headers['content-type'] || '',
-      };
-    } catch (error) {
-      return { success: false, error: error.message, url };
     }
   },
 };

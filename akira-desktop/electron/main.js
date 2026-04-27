@@ -2,106 +2,43 @@ const { app, BrowserWindow, ipcMain, Tray, Menu, globalShortcut, screen, nativeI
 const path = require('path');
 const Store = require('electron-store');
 
-// Import tools
-const { executeTool, getToolsForAPI } = require('./tools');
+// Import tools (for backward compatibility)
+const { executeTool, getToolsForAPI, getToolsWithCategories } = require('./tools');
 const { getSystemPrompt } = require('./system-prompt');
 
-// Free OpenRouter models - dynamically fetched on startup
-let FREE_MODELS = [];
+// Import multi-agent system
+const { runOrchestrator, initializeAgents, getAvailableAgents, setWorkspaceRoot, clearCache, getCacheStats } = require('./agents/init');
 
-// Known models that support tool/function calling (fallback list)
-// These are either free or very cheap and confirmed to support tools
-const KNOWN_TOOL_CAPABLE_MODELS = [
-  { id: 'google/gemini-2.0-flash-001', name: 'Gemini 2.0 Flash', contextLength: 1048576, maxCompletionTokens: 8192, supportsTools: true },
-  { id: 'google/gemini-flash-1.5', name: 'Gemini Flash 1.5', contextLength: 1000000, maxCompletionTokens: 8192, supportsTools: true },
-  { id: 'google/gemini-flash-1.5-8b', name: 'Gemini Flash 1.5 8B', contextLength: 1000000, maxCompletionTokens: 8192, supportsTools: true },
-  { id: 'meta-llama/llama-3.1-70b-instruct', name: 'Llama 3.1 70B', contextLength: 131072, maxCompletionTokens: 4096, supportsTools: true },
-  { id: 'meta-llama/llama-3.1-8b-instruct', name: 'Llama 3.1 8B', contextLength: 131072, maxCompletionTokens: 4096, supportsTools: true },
-  { id: 'mistralai/mistral-nemo', name: 'Mistral Nemo', contextLength: 128000, maxCompletionTokens: 4096, supportsTools: true },
-  { id: 'qwen/qwen-2.5-72b-instruct', name: 'Qwen 2.5 72B', contextLength: 131072, maxCompletionTokens: 4096, supportsTools: true },
-];
-
-// Fetch free models from OpenRouter API
-async function fetchFreeModels() {
-  try {
-    const response = await fetch('https://openrouter.ai/api/v1/models', {
-      headers: {
-        'HTTP-Referer': 'https://akira.app',
-        'X-Title': 'Akira Desktop'
-      }
-    });
-
-    if (!response.ok) {
-      console.error('Failed to fetch models:', response.status);
-      return;
-    }
-
-    const data = await response.json();
-
-    // Filter for free chat models (exclude music, image, embedding, audio models)
-    const excludePatterns = [
-      'embedding', 'whisper', 'tts', 'audio', 'music', 'suno',
-      'image', 'vision', 'dall-e', 'stable-diffusion', 'midjourney',
-      'moderation', 'rerank'
-    ];
-
-    FREE_MODELS = data.data
-      .filter(m => {
-        const isFree = m.id.includes(':free') ||
-                       (m.pricing?.prompt === '0' && m.pricing?.completion === '0') ||
-                       (m.pricing?.prompt === 0 && m.pricing?.completion === 0);
-        const idLower = m.id.toLowerCase();
-        const isExcluded = excludePatterns.some(pattern => idLower.includes(pattern));
-        // Only include models that output text (includes multimodal input models)
-        const outputsText = m.architecture?.modality?.endsWith('->text') || !m.architecture?.modality;
-        const isChat = !isExcluded && outputsText;
-        // IMPORTANT: Only include models that support tool/function calling
-        const supportsTools = m.supported_parameters?.includes('tools') ||
-                              m.supported_parameters?.includes('tool_choice') ||
-                              m.supported_parameters?.includes('functions');
-        return isFree && isChat && supportsTools;
-      })
-      .map(m => ({
-        id: m.id,
-        name: m.name || m.id,
-        contextLength: m.context_length,
-        maxCompletionTokens: m.top_provider?.max_completion_tokens || null,
-        supportsTools: true
-      }))
-      .sort((a, b) => (b.contextLength || 0) - (a.contextLength || 0)); // Sort by context length desc
-
-    console.log(`Loaded ${FREE_MODELS.length} free models with tool support from OpenRouter:`);
-    FREE_MODELS.slice(0, 10).forEach(m => console.log(`  - ${m.id}`));
-
-    // If no free models support tools, use known tool-capable models as fallback
-    if (FREE_MODELS.length === 0) {
-      console.warn('No free models with tool support found. Using known tool-capable models.');
-      console.warn('Note: These models may have usage costs. Check OpenRouter pricing.');
-      FREE_MODELS = [...KNOWN_TOOL_CAPABLE_MODELS];
-    }
-
-    // Update default model if current one is not in the list
-    const currentDefault = store.get('defaultModel');
-    if (FREE_MODELS.length > 0 && !FREE_MODELS.find(m => m.id === currentDefault)) {
-      store.set('defaultModel', FREE_MODELS[0].id);
-      console.log(`Updated default model to: ${FREE_MODELS[0].id}`);
-    }
-  } catch (error) {
-    console.error('Error fetching free models:', error);
-  }
-}
+// Import provider system
+const { getProviderList, getProvider } = require('./providers');
 
 // Initialize store for settings
 const store = new Store({
   name: 'akira-settings',
   defaults: {
-    apiKey: '',
-    defaultModel: '', // Will be set after fetching free models
+    apiKey: '', // Legacy - kept for migration
     temperature: 0.7,
     corner: 'bottom-right',
     theme: 'system',
     widgetMode: 'compact', // compact, sidebar, window
-    wasVisible: true
+    wasVisible: true,
+    reasoningEnabled: true,
+    disabledTools: [], // Array of tool names to disable
+    // Provider settings
+    selectedProvider: 'openrouter',
+    selectedModel: 'openrouter/auto',
+    providerApiKeys: {
+      openrouter: '',
+      anthropic: '',
+      bedrock: '' // AWS Access Key ID
+    },
+    // Bedrock-specific credentials
+    bedrockCredentials: {
+      awsSecretAccessKey: '',
+      awsRegion: 'us-east-1'
+    },
+    // Per-model settings (keyed by model ID)
+    modelSettings: {}
   }
 });
 
@@ -109,9 +46,20 @@ let mainWindow = null;
 let tray = null;
 let currentCornerIndex = 3; // Start at bottom-right
 
-// Track rate-limited models with cooldown (model -> timestamp when cooldown expires)
-const rateLimitedModels = new Map();
-const RATE_LIMIT_COOLDOWN_MS = 60000; // 60 seconds cooldown
+// Cleanup tray on process exit (handles dev server termination)
+const cleanupTray = () => {
+  if (tray) {
+    tray.destroy();
+    tray = null;
+  }
+};
+
+// Handle various termination signals
+process.on('exit', cleanupTray);
+process.on('SIGINT', () => { cleanupTray(); process.exit(); });
+process.on('SIGTERM', () => { cleanupTray(); process.exit(); });
+process.on('SIGHUP', () => { cleanupTray(); process.exit(); });
+
 
 // Window dimensions for different modes
 const COMPACT_WIDTH = 400;
@@ -147,10 +95,13 @@ function getWindowConfig(mode) {
 
   switch (mode) {
     case 'sidebar':
+      const sidebarCorner = store.get('corner', 'right');
+      // Normalize legacy corner values to left/right
+      const sidebarPosition = (sidebarCorner === 'left' || sidebarCorner === 'top-left') ? 'left' : 'right';
       return {
         width: SIDEBAR_WIDTH,
         height: workArea.height,
-        x: workArea.x + workArea.width - SIDEBAR_WIDTH,
+        x: sidebarPosition === 'left' ? workArea.x : workArea.x + workArea.width - SIDEBAR_WIDTH,
         y: workArea.y,
         alwaysOnTop: true,
         skipTaskbar: true,
@@ -189,7 +140,17 @@ function createWindow() {
   const widgetMode = store.get('widgetMode', 'compact');
   const config = getWindowConfig(widgetMode);
 
+  // Always start at bottom-right corner with proper padding (like collapsed ball)
+  if (widgetMode === 'compact') {
+    store.set('corner', 'bottom-right');
+    currentCornerIndex = 3; // bottom-right index
+    const workArea = screen.getPrimaryDisplay().workArea;
+    config.x = Math.round(workArea.x + workArea.width - COMPACT_WIDTH - MARGIN);
+    config.y = Math.round(workArea.y + workArea.height - COMPACT_HEIGHT - MARGIN);
+  }
+
   mainWindow = new BrowserWindow({
+    title: 'Akira',
     width: config.width,
     height: config.height,
     x: config.x,
@@ -203,6 +164,7 @@ function createWindow() {
     minHeight: 400,
     backgroundColor: '#00000000', // Fully transparent background
     hasShadow: false, // Disable native shadow to prevent white box
+    icon: path.join(__dirname, 'icons', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -249,8 +211,8 @@ function createWindow() {
 }
 
 function createTray() {
-  // Create a simple icon (16x16 colored square as fallback)
-  const iconPath = path.join(__dirname, 'icons', 'tray.png');
+  // Use .ico for Windows system tray compatibility
+  const iconPath = path.join(__dirname, 'icons', 'icon.ico');
   let trayIcon;
 
   try {
@@ -263,6 +225,7 @@ function createTray() {
     trayIcon = nativeImage.createFromBuffer(createSimpleIcon());
   }
 
+  // Windows system tray expects 16x16 icons
   tray = new Tray(trayIcon.resize({ width: 16, height: 16 }));
 
   const contextMenu = Menu.buildFromTemplate([
@@ -306,19 +269,29 @@ function createTray() {
 
   tray.on('click', () => {
     if (mainWindow) {
-      // Always move to bottom-right corner
-      const corner = 'bottom-right';
-      store.set('corner', corner);
-      currentCornerIndex = CORNERS.indexOf(corner);
+      const widgetMode = store.get('widgetMode', 'compact');
+      const workArea = screen.getPrimaryDisplay().workArea;
 
-      // If collapsed, restore to normal size first
-      if (isWindowCollapsed) {
-        const { x, y } = getCornerPosition(corner);
-        mainWindow.setSize(COMPACT_WIDTH, COMPACT_HEIGHT);
-        mainWindow.setPosition(x, y, true);
+      if (widgetMode === 'sidebar') {
+        // Sidebar mode: move to right side
+        store.set('corner', 'right');
+        const x = workArea.x + workArea.width - SIDEBAR_WIDTH;
+        mainWindow.setPosition(x, workArea.y, true);
       } else {
-        const { x, y } = getCornerPosition(corner);
-        mainWindow.setPosition(x, y, true);
+        // Compact mode: move to bottom-right corner
+        const corner = 'bottom-right';
+        store.set('corner', corner);
+        currentCornerIndex = CORNERS.indexOf(corner);
+
+        // If collapsed, restore to normal size first
+        if (isWindowCollapsed) {
+          const { x, y } = getCornerPosition(corner);
+          mainWindow.setSize(COMPACT_WIDTH, COMPACT_HEIGHT);
+          mainWindow.setPosition(x, y, true);
+        } else {
+          const { x, y } = getCornerPosition(corner);
+          mainWindow.setPosition(x, y, true);
+        }
       }
 
       // Show and focus
@@ -348,14 +321,10 @@ function createSimpleIcon() {
 }
 
 function registerGlobalShortcut() {
-  globalShortcut.register('CommandOrControl+Shift+A', () => {
+  // Toggle collapse/expand (Ctrl+Shift+A)
+  globalShortcut.register('CommandOrControl+Shift+A', async () => {
     if (mainWindow) {
-      if (mainWindow.isVisible()) {
-        mainWindow.hide();
-      } else {
-        mainWindow.show();
-        mainWindow.focus();
-      }
+      await setCollapsedState(!isWindowCollapsed);
     }
   });
 }
@@ -364,9 +333,6 @@ function registerGlobalShortcut() {
 app.whenReady().then(async () => {
   // Load persistent chat history
   loadPersistentHistory();
-
-  // Fetch free models from OpenRouter first
-  await fetchFreeModels();
 
   createWindow();
   createTray();
@@ -385,6 +351,17 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  if (tray) {
+    tray.destroy();
+    tray = null;
+  }
+});
+
+app.on('before-quit', () => {
+  if (tray) {
+    tray.destroy();
+    tray = null;
+  }
 });
 
 // Prevent multiple instances
@@ -404,15 +381,33 @@ if (!gotTheLock) {
 
 // Settings
 ipcMain.handle('get-settings', () => {
+  // Migrate legacy apiKey to providerApiKeys if needed
+  const legacyKey = store.get('apiKey', '');
+  const providerKeys = store.get('providerApiKeys', { openrouter: '', anthropic: '' });
+  if (legacyKey && !providerKeys.openrouter) {
+    providerKeys.openrouter = legacyKey;
+    store.set('providerApiKeys', providerKeys);
+  }
+
   return {
-    apiKey: store.get('apiKey', ''),
-    defaultModel: store.get('defaultModel'),
-    maxTokens: store.get('maxTokens'),
+    apiKey: store.get('apiKey', ''), // Legacy
     temperature: store.get('temperature'),
     corner: store.get('corner'),
     theme: store.get('theme'),
-    widgetMode: store.get('widgetMode', 'compact')
+    widgetMode: store.get('widgetMode', 'compact'),
+    defaultModel: store.get('defaultModel', 'openrouter/free'), // Legacy
+    reasoningEnabled: store.get('reasoningEnabled', true),
+    disabledTools: store.get('disabledTools', []),
+    // Provider settings
+    selectedProvider: store.get('selectedProvider', 'openrouter'),
+    selectedModel: store.get('selectedModel', 'openrouter/auto'),
+    providerApiKeys: providerKeys
   };
+});
+
+// Get tools with categories for UI
+ipcMain.handle('get-tools-with-categories', () => {
+  return getToolsWithCategories();
 });
 
 ipcMain.handle('save-settings', (event, settings) => {
@@ -436,20 +431,58 @@ ipcMain.handle('get-api-key', () => {
   return store.get('apiKey', '');
 });
 
+// Draft text persistence (survives app restarts)
+ipcMain.handle('get-draft-text', () => {
+  return store.get('draftText', '');
+});
+
+ipcMain.handle('set-draft-text', (event, text) => {
+  store.set('draftText', text);
+  return true;
+});
+
 // Window control
 ipcMain.handle('switch-corner', (event, corner) => {
+  const widgetMode = store.get('widgetMode', 'compact');
   store.set('corner', corner);
-  currentCornerIndex = CORNERS.indexOf(corner);
-  if (currentCornerIndex === -1) currentCornerIndex = 3;
-  if (mainWindow) {
-    const { x, y } = getCornerPosition(corner);
-    mainWindow.setPosition(x, y, true);
+
+  if (widgetMode === 'sidebar') {
+    // Sidebar mode: handle left/right positions
+    if (mainWindow) {
+      const workArea = screen.getPrimaryDisplay().workArea;
+      const x = corner === 'left' ? workArea.x : workArea.x + workArea.width - SIDEBAR_WIDTH;
+      mainWindow.setPosition(x, workArea.y, true);
+    }
+  } else {
+    // Compact mode: handle corner positions
+    currentCornerIndex = CORNERS.indexOf(corner);
+    if (currentCornerIndex === -1) currentCornerIndex = 3;
+    if (mainWindow) {
+      const { x, y } = getCornerPosition(corner);
+      mainWindow.setPosition(x, y, true);
+    }
   }
   return true;
 });
 
 // Auto-relocate to next corner (called on mouse enter)
 ipcMain.handle('auto-relocate', () => {
+  const widgetMode = store.get('widgetMode', 'compact');
+
+  // In sidebar mode, only allow left and right
+  if (widgetMode === 'sidebar') {
+    const currentCorner = store.get('corner', 'right');
+    const nextCorner = currentCorner === 'left' ? 'right' : 'left';
+    store.set('corner', nextCorner);
+    if (mainWindow) {
+      const workArea = screen.getPrimaryDisplay().workArea;
+      const x = nextCorner === 'left' ? workArea.x : workArea.x + workArea.width - SIDEBAR_WIDTH;
+      mainWindow.setPosition(x, workArea.y, true);
+    }
+    return nextCorner;
+  }
+
+  // For other modes, cycle through all corners
   currentCornerIndex = (currentCornerIndex + 1) % CORNERS.length;
   const nextCorner = CORNERS[currentCornerIndex];
   store.set('corner', nextCorner);
@@ -510,40 +543,60 @@ ipcMain.handle('is-maximized', () => {
   return mainWindow ? mainWindow.isMaximized() : false;
 });
 
-// Change widget mode (requires window recreation)
+// Change widget mode (resize/reposition existing window to preserve React state)
 ipcMain.handle('set-widget-mode', async (event, mode) => {
   store.set('widgetMode', mode);
 
-  // Recreate window with new mode
-  if (mainWindow) {
-    mainWindow.destroy();
-    mainWindow = null;
+  // Set appropriate default position for the mode
+  if (mode === 'sidebar') {
+    store.set('corner', 'right');
+  } else if (mode === 'compact') {
+    store.set('corner', 'bottom-right');
+    currentCornerIndex = 3;
   }
 
-  // Small delay to ensure cleanup
-  await new Promise(r => setTimeout(r, 100));
+  if (!mainWindow) {
+    createWindow();
+    return true;
+  }
 
-  createWindow();
+  // Get new window configuration
+  const config = getWindowConfig(mode);
+
+  // Update window properties without recreation
+  mainWindow.setAlwaysOnTop(config.alwaysOnTop, config.alwaysOnTop ? 'screen-saver' : undefined);
+  mainWindow.setSkipTaskbar(config.skipTaskbar);
+
+  // Animate to new bounds
+  await animateBounds({
+    x: config.x,
+    y: config.y,
+    width: config.width,
+    height: config.height
+  }, 200);
+
+  // Notify renderer of mode change
+  mainWindow.webContents.send('widget-mode-changed', mode);
+
   return true;
 });
 
-// Collapsed ball dimensions
-const COLLAPSED_SIZE = 48;
+// Collapsed tab dimensions (thin vertical bar on right edge)
+const COLLAPSED_WIDTH = 24;
+const COLLAPSED_HEIGHT = 60;
 let isWindowCollapsed = false;
 let animationInProgress = false;
 
-// Smooth window bounds animation
-function animateBounds(targetBounds, duration = 200) {
+// Smooth window bounds animation using setInterval for consistent timing
+function animateBounds(targetBounds, duration = 180) {
   if (!mainWindow || animationInProgress) return Promise.resolve();
 
   animationInProgress = true;
   const startBounds = mainWindow.getBounds();
   const startTime = Date.now();
-  const steps = 20;
-  const stepDuration = duration / steps;
 
   return new Promise((resolve) => {
-    const animate = () => {
+    const interval = setInterval(() => {
       const elapsed = Date.now() - startTime;
       const progress = Math.min(elapsed / duration, 1);
 
@@ -559,25 +612,75 @@ function animateBounds(targetBounds, duration = 200) {
 
       mainWindow.setBounds(currentBounds);
 
-      if (progress < 1) {
-        setTimeout(animate, stepDuration);
-      } else {
+      if (progress >= 1) {
+        clearInterval(interval);
         mainWindow.setBounds(targetBounds);
         animationInProgress = false;
         resolve();
       }
-    };
-
-    animate();
+    }, 16); // ~60fps
   });
 }
 
-ipcMain.handle('set-collapsed', async (event, collapsed) => {
+// Determine which corner to anchor based on ball position (quadrant check)
+function getAnchorCorner(ballX, ballY, workArea) {
+  const centerX = workArea.x + workArea.width / 2;
+  const centerY = workArea.y + workArea.height / 2;
+
+  const isLeft = ballX < centerX;
+  const isTop = ballY < centerY;
+
+  if (isTop && isLeft) return 'top-left';
+  if (isTop && !isLeft) return 'top-right';
+  if (!isTop && isLeft) return 'bottom-left';
+  return 'bottom-right';
+}
+
+// Calculate window position based on ball position and anchor corner, clamped to screen
+function getExpandedPosition(ballBounds, windowWidth, windowHeight, workArea) {
+  const anchorCorner = getAnchorCorner(ballBounds.x, ballBounds.y, workArea);
+
+  let x, y;
+
+  switch (anchorCorner) {
+    case 'top-left':
+      // Ball is at top-left corner of window
+      x = ballBounds.x;
+      y = ballBounds.y;
+      break;
+    case 'top-right':
+      // Ball is at top-right corner of window
+      x = ballBounds.x + ballBounds.width - windowWidth;
+      y = ballBounds.y;
+      break;
+    case 'bottom-left':
+      // Ball is at bottom-left corner of window
+      x = ballBounds.x;
+      y = ballBounds.y + ballBounds.height - windowHeight;
+      break;
+    case 'bottom-right':
+    default:
+      // Ball is at bottom-right corner of window
+      x = ballBounds.x + ballBounds.width - windowWidth;
+      y = ballBounds.y + ballBounds.height - windowHeight;
+      break;
+  }
+
+  // Clamp to screen bounds with margin
+  x = Math.max(workArea.x + MARGIN, Math.min(x, workArea.x + workArea.width - windowWidth - MARGIN));
+  y = Math.max(workArea.y + MARGIN, Math.min(y, workArea.y + workArea.height - windowHeight - MARGIN));
+
+  return { x: Math.round(x), y: Math.round(y) };
+}
+
+// Set collapsed state (used by IPC and shortcut)
+async function setCollapsedState(collapsed) {
   if (!mainWindow) return false;
 
   isWindowCollapsed = collapsed;
   // Use workArea which includes x, y origin (accounts for taskbar position)
   const workArea = screen.getPrimaryDisplay().workArea;
+  const widgetMode = store.get('widgetMode', 'compact');
 
   // Notify renderer of collapsed state change first for expand (so UI updates before animation)
   if (!collapsed) {
@@ -585,27 +688,54 @@ ipcMain.handle('set-collapsed', async (event, collapsed) => {
   }
 
   if (collapsed) {
-    // Position collapsed ball at bottom-right with same margin as window
-    const x = Math.round(workArea.x + workArea.width - COLLAPSED_SIZE - MARGIN);
-    const y = Math.round(workArea.y + workArea.height - COLLAPSED_SIZE - MARGIN);
-    await animateBounds({ x, y, width: COLLAPSED_SIZE, height: COLLAPSED_SIZE });
+    // Position collapsed tab: flush with right edge, padding from bottom (taskbar)
+    const x = Math.round(workArea.x + workArea.width - COLLAPSED_WIDTH);
+    const y = Math.round(workArea.y + workArea.height - COLLAPSED_HEIGHT - MARGIN);
+    await animateBounds({ x, y, width: COLLAPSED_WIDTH, height: COLLAPSED_HEIGHT });
     // Notify renderer after collapse animation
     mainWindow.webContents.send('collapsed-changed', collapsed);
   } else {
-    // Restore to mode-appropriate size
-    const widgetMode = store.get('widgetMode', 'compact');
+    // Get target size based on widget mode
     const config = getWindowConfig(widgetMode);
-    await animateBounds({ x: config.x, y: config.y, width: config.width, height: config.height });
+
+    let x, y;
+    if (widgetMode === 'sidebar') {
+      // Sidebar mode: snap to edge (no margin), full height
+      const sidebarCorner = store.get('corner', 'right');
+      x = sidebarCorner === 'left' ? workArea.x : workArea.x + workArea.width - config.width;
+      y = workArea.y;
+    } else {
+      // Compact mode: use ball position to determine anchor corner
+      const ballBounds = mainWindow.getBounds();
+      const pos = getExpandedPosition(ballBounds, config.width, config.height, workArea);
+      x = pos.x;
+      y = pos.y;
+    }
+
+    await animateBounds({ x, y, width: config.width, height: config.height });
+    // Focus window so user can start typing
+    mainWindow.focus();
   }
 
   return true;
+}
+
+ipcMain.handle('set-collapsed', async (event, collapsed) => {
+  return setCollapsedState(collapsed);
 });
 
 // Move window by delta (for dragging)
 ipcMain.handle('move-window', (event, { deltaX, deltaY }) => {
   if (!mainWindow) return false;
   const [x, y] = mainWindow.getPosition();
-  mainWindow.setPosition(x + deltaX, y + deltaY);
+  const widgetMode = store.get('widgetMode', 'compact');
+
+  // In sidebar mode, only allow horizontal movement
+  if (widgetMode === 'sidebar') {
+    mainWindow.setPosition(x + deltaX, y);
+  } else {
+    mainWindow.setPosition(x + deltaX, y + deltaY);
+  }
   return true;
 });
 
@@ -625,22 +755,86 @@ ipcMain.handle('test-connection', async (event, apiKey) => {
   }
 });
 
-ipcMain.handle('get-models', async (event, apiKey) => {
-  // Return the dynamically fetched free models
-  // If user has API key, we could fetch all models, but free models are sufficient
-  if (FREE_MODELS.length === 0) {
-    await fetchFreeModels();
+// Get list of available providers
+ipcMain.handle('get-providers', () => {
+  return getProviderList();
+});
+
+// Get API key for a specific provider
+ipcMain.handle('get-provider-api-key', (event, providerId) => {
+  const keys = store.get('providerApiKeys', {});
+  return keys[providerId] || '';
+});
+
+// Set API key for a specific provider
+ipcMain.handle('set-provider-api-key', (event, { providerId, apiKey }) => {
+  const keys = store.get('providerApiKeys', {});
+  keys[providerId] = apiKey;
+  store.set('providerApiKeys', keys);
+  return true;
+});
+
+// Get currently selected provider
+ipcMain.handle('get-selected-provider', () => {
+  return store.get('selectedProvider', 'openrouter');
+});
+
+// Set selected provider
+ipcMain.handle('set-selected-provider', (event, providerId) => {
+  store.set('selectedProvider', providerId);
+  // Set default model for this provider if no model is set
+  const provider = getProvider(providerId);
+  if (provider) {
+    const currentModel = store.get('selectedModel', '');
+    if (!currentModel || currentModel.startsWith('openrouter/')) {
+      store.set('selectedModel', provider.defaultModel);
+    }
   }
-  return FREE_MODELS;
+  return true;
 });
 
-ipcMain.handle('get-free-models', () => {
-  return FREE_MODELS;
+// Get selected model
+ipcMain.handle('get-selected-model', () => {
+  return store.get('selectedModel', 'openrouter/auto');
 });
 
-ipcMain.handle('refresh-models', async () => {
-  await fetchFreeModels();
-  return FREE_MODELS;
+// Set selected model
+ipcMain.handle('set-selected-model', (event, model) => {
+  store.set('selectedModel', model);
+  return true;
+});
+
+// Get Bedrock credentials
+ipcMain.handle('get-bedrock-credentials', () => {
+  return store.get('bedrockCredentials', { awsSecretAccessKey: '', awsRegion: 'us-east-1' });
+});
+
+// Set Bedrock credentials
+ipcMain.handle('set-bedrock-credentials', (event, credentials) => {
+  store.set('bedrockCredentials', credentials);
+  return true;
+});
+
+// Get model-specific settings
+ipcMain.handle('get-model-settings', (event, modelId) => {
+  const allModelSettings = store.get('modelSettings', {});
+  return allModelSettings[modelId] || { maxTokens: 16384, thinkingBudget: 10000 };
+});
+
+// Set model-specific settings
+ipcMain.handle('set-model-settings', (event, modelId, settings) => {
+  const allModelSettings = store.get('modelSettings', {});
+  allModelSettings[modelId] = { ...allModelSettings[modelId], ...settings };
+  store.set('modelSettings', allModelSettings);
+  return true;
+});
+
+// Legacy: Model selection (kept for backward compatibility)
+ipcMain.handle('get-models', () => {
+  return [
+    { id: 'openrouter/auto', name: 'OpenRouter Auto' },
+    { id: 'openrouter/free', name: 'OpenRouter Free' }
+  ];
 });
 
 // Conversation history storage (in-memory, keyed by chatId)
@@ -712,275 +906,366 @@ function generateChatTitle(messages) {
 }
 
 
-// Chat with tools and automatic model fallback
-ipcMain.on('send-message', async (event, { message, chatId, model, history }) => {
-  const apiKey = store.get('apiKey', '');
+// Chat with Multi-Agent System
+ipcMain.on('send-message', async (event, { message, chatId, skipCache = false }) => {
+  // Get provider settings
+  const selectedProvider = store.get('selectedProvider', 'openrouter');
+  const providerKeys = store.get('providerApiKeys', {});
+  const apiKey = providerKeys[selectedProvider] || store.get('apiKey', ''); // Fallback to legacy
+
   if (!apiKey) {
-    event.reply('chat-stream', { event: 'error', data: { error: 'API key not configured' }, chatId });
+    const provider = getProvider(selectedProvider);
+    event.reply('chat-stream', {
+      event: 'error',
+      data: { error: `${provider?.name || selectedProvider} API key not configured` },
+      chatId
+    });
     return;
   }
 
-  const settings = {
-    maxTokens: store.get('maxTokens', 4096),
-    temperature: store.get('temperature', 0.7),
-    thinkingEnabled: store.get('thinkingEnabled', true),
-    thinkingBudget: store.get('thinkingBudget', 10000)
-  };
-
+  const temperature = store.get('temperature', 0.7);
   const finalChatId = chatId || require('uuid').v4();
 
   // Create AbortController for this generation
   const controller = new AbortController();
   generationControllers.set(finalChatId, controller);
-  // Ensure we have models to try
-  if (FREE_MODELS.length === 0) {
-    await fetchFreeModels();
-  }
 
-  if (FREE_MODELS.length === 0) {
-    event.reply('chat-stream', { event: 'error', data: { error: 'No models available. Check your internet connection.' }, chatId: finalChatId });
-    return;
-  }
+  // Get or create conversation history (stores ALL message types in chronological order)
+  let messages = conversationHistory.get(finalChatId) || [];
 
-  // Get or create conversation history
-  let messages = conversationHistory.get(finalChatId) || [
-    { role: 'system', content: getSystemPrompt() }
-  ];
-
-  // Add user message
-  messages.push({ role: 'user', content: message });
+  // Add user message to history
+  messages.push({ role: 'user', content: message, timestamp: new Date().toISOString() });
 
   // Trim history if too long
   if (messages.length > MAX_HISTORY_LENGTH) {
-    messages = [messages[0], ...messages.slice(-MAX_HISTORY_LENGTH + 1)];
+    messages = messages.slice(-MAX_HISTORY_LENGTH);
   }
 
   // Save updated history
   conversationHistory.set(finalChatId, messages);
 
-  // Build list of models to try
-  const now = Date.now();
-  const defaultModel = store.get('defaultModel') || FREE_MODELS[0].id;
-  const preferredModel = model || defaultModel;
-  const allModels = [preferredModel, ...FREE_MODELS.map(m => m.id).filter(m => m !== preferredModel)];
-  const modelsToTry = allModels.filter(m => {
-    const cooldownExpiry = rateLimitedModels.get(m);
-    if (cooldownExpiry && now < cooldownExpiry) {
-      console.log(`Skipping ${m} - still in cooldown`);
-      return false;
-    }
-    if (cooldownExpiry) rateLimitedModels.delete(m);
-    return true;
-  });
-
-  if (modelsToTry.length === 0) {
-    modelsToTry.push(...allModels);
-    rateLimitedModels.clear();
-  }
-
   // Send meta event
   event.reply('chat-stream', { event: 'meta', data: { chat_id: finalChatId }, chatId: finalChatId });
 
-  // Get tools for API
-  const tools = getToolsForAPI();
+  // Get selected model from settings
+  const selectedModel = store.get('selectedModel', 'openrouter/auto');
 
-  // Conversation loop (handles tool calls)
-  let iterationCount = 0;
-  const MAX_ITERATIONS = 30; // Prevent infinite loops
+  // Get additional credentials for Bedrock
+  const bedrockCredentials = store.get('bedrockCredentials', {});
 
-  while (iterationCount < MAX_ITERATIONS) {
-    iterationCount++;
+  // API configuration for agents
+  const reasoningEnabled = store.get('reasoningEnabled', true);
+  const disabledTools = store.get('disabledTools', []);
+  // Get model-specific settings
+  const allModelSettings = store.get('modelSettings', {});
+  const modelSettings = allModelSettings[selectedModel] || { maxTokens: 16384, thinkingBudget: 10000 };
+  const apiConfig = {
+    apiKey,
+    model: selectedModel,
+    temperature,
+    maxTokens: modelSettings.maxTokens,
+    thinkingBudget: modelSettings.thinkingBudget,
+    provider: selectedProvider,
+    credentials: selectedProvider === 'bedrock' ? bedrockCredentials : {},
+    reasoningEnabled,
+    disabledTools
+  };
 
-    // Try each model
-    let success = false;
-    let responseData = null;
+  // Track accumulated content and reasoning for current assistant response
+  let accumulatedContent = '';
+  let accumulatedReasoning = '';
+  let reasoningIndex = 0;
+  let usedModel = selectedModel;
 
-    for (let i = 0; i < modelsToTry.length; i++) {
-      const currentModel = modelsToTry[i];
-      const modelInfo = FREE_MODELS.find(m => m.id === currentModel);
-      // Use model's max_completion_tokens, but ensure room for input (at least 10k tokens)
-      const modelMaxOutput = modelInfo?.maxCompletionTokens || 4096;
-      const contextLength = modelInfo?.contextLength || 32000;
-      const maxTokens = Math.min(modelMaxOutput, contextLength - 10000, 65536);
-      console.log(`[${finalChatId}] Trying model: ${currentModel} (max_tokens: ${maxTokens}, iteration ${iterationCount})`);
-
-      try {
-        // Check if this generation was cancelled
-        if (generationControllers.has(finalChatId) && generationControllers.get(finalChatId).signal.aborted) {
-          console.log(`[${finalChatId}] Generation was cancelled`);
-          return;
-        }
-
-        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://akira.app',
-            'X-Title': 'Akira Desktop'
-          },
-          body: JSON.stringify({
-            model: currentModel,
-            messages,
-            tools: tools.length > 0 ? tools : undefined,
-            tool_choice: 'auto',
-            max_tokens: maxTokens,
-            temperature: settings.temperature,
-            ...(settings.thinkingEnabled && {
-              thinking: {
-                type: 'enabled',
-                budget_tokens: settings.thinkingBudget
-              }
-            })
-          }),
-          signal: controller.signal
-        });
-
-        if (response.status === 429 || response.status >= 500) {
-          console.log(`Model ${currentModel} returned ${response.status}`);
-          rateLimitedModels.set(currentModel, Date.now() + RATE_LIMIT_COOLDOWN_MS);
-          if (i < modelsToTry.length - 1) continue;
-          const errorText = await response.text();
-          event.reply('chat-stream', { event: 'error', data: { error: `All free models are rate-limited. Please add a paid API key at https://openrouter.ai/settings/integrations to get higher limits.` }, chatId: finalChatId });
-          return;
-        }
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.log(`Model ${currentModel} error: ${errorText}`);
-          if (i < modelsToTry.length - 1) continue;
-          event.reply('chat-stream', { event: 'error', data: { error: errorText }, chatId: finalChatId });
-          return;
-        }
-
-        responseData = await response.json();
-        success = true;
-        break;
-
-      } catch (e) {
-        console.log(`Model ${currentModel} failed: ${e.message}`);
-        if (i < modelsToTry.length - 1) continue;
-        event.reply('chat-stream', { event: 'error', data: { error: e.message }, chatId: finalChatId });
-        return;
-      }
-    }
-
-    if (!success || !responseData) {
-      event.reply('chat-stream', { event: 'error', data: { error: 'Failed to get response from any model' }, chatId: finalChatId });
-      return;
-    }
-
-    const choice = responseData.choices?.[0];
-    if (!choice) {
-      event.reply('chat-stream', { event: 'error', data: { error: 'Invalid response from model' }, chatId: finalChatId });
-      return;
-    }
-
-    const assistantMessage = choice.message;
-
-    // Check for tool calls
-    if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
-      // Add assistant message with tool calls to history
-      messages.push(assistantMessage);
-
-      // Send tool use event to frontend
-      const toolNames = assistantMessage.tool_calls.map(tc => tc.function.name);
-      event.reply('chat-stream', { event: 'tool_use', data: { tools: toolNames }, chatId: finalChatId });
-
-      // Execute each tool call
-      for (const toolCall of assistantMessage.tool_calls) {
-        const toolName = toolCall.function.name;
-        let toolArgs = {};
-
-        try {
-          toolArgs = JSON.parse(toolCall.function.arguments || '{}');
-        } catch {
-          toolArgs = {};
-        }
-
-        console.log(`[${finalChatId}] Executing tool: ${toolName}`, toolArgs);
-
-        const toolResult = await executeTool(toolName, toolArgs);
-
-        // Add tool result to messages
+  // Event handler that translates agent events to IPC events AND saves to history
+  const onEvent = (agentEvent) => {
+    switch (agentEvent.type) {
+      case 'agent_start':
+        // Save agent start to history
         messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: JSON.stringify(toolResult)
+          type: 'agent',
+          agent: agentEvent.agent,
+          displayName: agentEvent.displayName,
+          task: agentEvent.task,
+          status: 'running',
+          timestamp: new Date().toISOString()
         });
+        conversationHistory.set(finalChatId, messages);
 
-        // Send tool result event
+        // Send agent activity event
         event.reply('chat-stream', {
-          event: 'tool_result',
-          data: { tool: toolName, result: toolResult },
+          event: 'agent_start',
+          data: {
+            agent: agentEvent.agent,
+            displayName: agentEvent.displayName,
+            task: agentEvent.task
+          },
           chatId: finalChatId
         });
-      }
+        break;
 
-      // Continue loop to get final response
-      conversationHistory.set(finalChatId, messages);
-      continue;
-    }
+      case 'agent_delegate':
+        // Save delegation to history
+        messages.push({
+          type: 'delegation',
+          fromAgent: agentEvent.fromAgent,
+          toAgent: agentEvent.toAgent,
+          task: agentEvent.task,
+          timestamp: new Date().toISOString()
+        });
+        conversationHistory.set(finalChatId, messages);
 
-    // No tool calls - this is the final response
-    // Handle content - could be string or array of content blocks (for thinking)
-    let content = '';
-    let thinking = '';
+        // Send delegation event
+        event.reply('chat-stream', {
+          event: 'agent_delegate',
+          data: {
+            fromAgent: agentEvent.fromAgent,
+            toAgent: agentEvent.toAgent,
+            task: agentEvent.task
+          },
+          chatId: finalChatId
+        });
+        break;
 
-    if (Array.isArray(assistantMessage.content)) {
-      // Content blocks format (used by Claude with thinking)
-      for (const block of assistantMessage.content) {
-        if (block.type === 'thinking') {
-          thinking = block.thinking || '';
-        } else if (block.type === 'text') {
-          content = block.text || '';
+      case 'agent_complete':
+        // Update agent status in history
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].type === 'agent' && messages[i].agent === agentEvent.agent && messages[i].status === 'running') {
+            messages[i].status = 'complete';
+            break;
+          }
         }
-      }
-    } else {
-      content = assistantMessage.content || '';
+        conversationHistory.set(finalChatId, messages);
+
+        // Send completion event
+        event.reply('chat-stream', {
+          event: 'agent_complete',
+          data: {
+            agent: agentEvent.agent,
+            displayName: agentEvent.displayName
+          },
+          chatId: finalChatId
+        });
+        break;
+
+      case 'agent_error':
+        console.log(`[${finalChatId}] Agent error:`, agentEvent.error);
+        break;
+
+      case 'delta':
+        // Accumulate content - we'll save the complete assistant message at the end
+        accumulatedContent += agentEvent.delta;
+
+        // Stream content delta
+        event.reply('chat-stream', {
+          event: 'delta',
+          data: { delta: agentEvent.delta },
+          chatId: finalChatId
+        });
+        break;
+
+      case 'reasoning':
+        // Accumulate reasoning
+        accumulatedReasoning += agentEvent.reasoning;
+
+        // Stream reasoning
+        event.reply('chat-stream', {
+          event: 'reasoning',
+          data: { reasoning: agentEvent.reasoning },
+          chatId: finalChatId
+        });
+        break;
+
+      case 'reasoning_complete':
+        // Save completed reasoning block to history
+        if (accumulatedReasoning) {
+          reasoningIndex++;
+          messages.push({
+            type: 'reasoning',
+            content: accumulatedReasoning,
+            status: 'complete',
+            index: reasoningIndex,
+            timestamp: new Date().toISOString()
+          });
+          conversationHistory.set(finalChatId, messages);
+          accumulatedReasoning = '';
+        }
+        break;
+
+      case 'tool_use':
+        // If there's accumulated reasoning, save it first (reasoning ends when tool starts)
+        if (accumulatedReasoning) {
+          reasoningIndex++;
+          messages.push({
+            type: 'reasoning',
+            content: accumulatedReasoning,
+            status: 'complete',
+            index: reasoningIndex,
+            timestamp: new Date().toISOString()
+          });
+          accumulatedReasoning = '';
+        }
+
+        // If there's accumulated content, save it as assistant message before tool
+        if (accumulatedContent.trim()) {
+          messages.push({
+            role: 'assistant',
+            content: accumulatedContent,
+            timestamp: new Date().toISOString()
+          });
+          accumulatedContent = '';
+        }
+
+        // Save tool use to history
+        messages.push({
+          type: 'tool',
+          toolId: agentEvent.toolId,
+          name: agentEvent.name,
+          input: agentEvent.input,
+          agent: agentEvent.agent,
+          status: 'running',
+          result: null,
+          timestamp: new Date().toISOString()
+        });
+        conversationHistory.set(finalChatId, messages);
+
+        // Tool use event
+        event.reply('chat-stream', {
+          event: 'tool_use',
+          data: {
+            toolId: agentEvent.toolId,
+            name: agentEvent.name,
+            input: agentEvent.input,
+            agent: agentEvent.agent
+          },
+          chatId: finalChatId
+        });
+        console.log(`[${finalChatId}] [${agentEvent.agent}] Tool: ${agentEvent.name}`, agentEvent.input);
+        break;
+
+      case 'tool_result':
+        // Update tool result in history
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].type === 'tool' && messages[i].toolId === agentEvent.toolId) {
+            messages[i].status = 'completed';
+            messages[i].result = agentEvent.result;
+            break;
+          }
+        }
+        conversationHistory.set(finalChatId, messages);
+
+        // Tool result event
+        event.reply('chat-stream', {
+          event: 'tool_result',
+          data: {
+            toolId: agentEvent.toolId,
+            name: agentEvent.name,
+            result: agentEvent.result,
+            agent: agentEvent.agent
+          },
+          chatId: finalChatId
+        });
+        break;
+    }
+  };
+
+  console.log(`[${finalChatId}] Starting multi-agent orchestration (model: ${selectedModel}, skipCache: ${skipCache})`);
+
+  // Track if response was from cache
+  let wasCached = false;
+
+  try {
+    // Extract LLM-relevant conversation history (user and assistant messages only)
+    // Exclude the just-added user message (last item) since it's passed as 'message'
+    const llmHistory = messages
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .slice(0, -1)
+      .map(m => ({ role: m.role, content: m.content }));
+
+    // Run the orchestrator
+    const result = await runOrchestrator({
+      message,
+      conversationHistory: llmHistory,
+      apiConfig,
+      onEvent,
+      signal: controller.signal,
+      skipCache
+    });
+
+    // Check if response was cached
+    wasCached = result.cached === true;
+
+    // Save any remaining reasoning before final response
+    if (accumulatedReasoning) {
+      reasoningIndex++;
+      messages.push({
+        type: 'reasoning',
+        content: accumulatedReasoning,
+        status: 'complete',
+        index: reasoningIndex,
+        timestamp: new Date().toISOString()
+      });
     }
 
-    // Add to history
-    messages.push({ role: 'assistant', content });
+    // Add remaining assistant content to history (only if there's content that wasn't saved before a tool)
+    if (accumulatedContent.trim()) {
+      messages.push({
+        role: 'assistant',
+        content: accumulatedContent,
+        timestamp: new Date().toISOString(),
+        cached: wasCached
+      });
+    }
+
     conversationHistory.set(finalChatId, messages);
 
     // Auto-save to persistent storage
     saveChatToPersistent(finalChatId, messages);
 
-    // Send thinking first if present
-    if (thinking) {
-      event.reply('chat-stream', { event: 'thinking', data: { thinking }, chatId: finalChatId });
-    }
-
-    // Stream the content (simulate streaming for non-streaming response)
-    if (content) {
-      // Send in chunks to simulate streaming
-      const chunkSize = 20;
-      for (let i = 0; i < content.length; i += chunkSize) {
-        const chunk = content.slice(i, i + chunkSize);
-        event.reply('chat-stream', { event: 'delta', data: { delta: chunk }, chatId: finalChatId });
-        await new Promise(r => setTimeout(r, 10)); // Small delay for smooth streaming
-      }
-    }
     // Cleanup controller
     generationControllers.delete(finalChatId);
 
     event.reply('chat-stream', {
       event: 'done',
-      data: { chat_id: finalChatId, model: responseData.model || modelsToTry[0] },
+      data: { chat_id: finalChatId, model: usedModel, cached: wasCached },
       chatId: finalChatId
     });
-    return;
-  }
 
-  // Max iterations reached
-  // Cleanup controller
-  generationControllers.delete(finalChatId);
-  event.reply('chat-stream', {
-    event: 'error',
-    data: { error: 'Too many tool iterations. Please try again.' },
-    chatId: finalChatId
-  });
+  } catch (e) {
+    if (e.name === 'AbortError' || e.message === 'Agent execution cancelled') {
+      console.log(`[${finalChatId}] Generation was cancelled by user`);
+
+      // Save partial content to history if any
+      if (accumulatedContent && accumulatedContent.trim()) {
+        messages.push({
+          role: 'assistant',
+          content: accumulatedContent,
+          incomplete: true,
+          timestamp: new Date().toISOString()
+        });
+        conversationHistory.set(finalChatId, messages);
+        saveChatToPersistent(finalChatId, messages);
+      }
+
+      generationControllers.delete(finalChatId);
+
+      event.reply('chat-stream', {
+        event: 'cancelled',
+        data: { chat_id: finalChatId, partial: accumulatedContent || '' },
+        chatId: finalChatId
+      });
+      return;
+    }
+
+    console.error(`[${finalChatId}] Error:`, e);
+    generationControllers.delete(finalChatId);
+
+    event.reply('chat-stream', {
+      event: 'error',
+      data: { error: e.message },
+      chatId: finalChatId
+    });
+  }
 });
 
 // Cancel ongoing generation
@@ -1050,5 +1335,46 @@ ipcMain.handle('delete-chat', (event, chatId) => {
   // Also remove from in-memory
   conversationHistory.delete(chatId);
 
+  return true;
+});
+
+// Reset Akira - clear all data except API key, then reload
+ipcMain.handle('reset-akira', async () => {
+  try {
+    // Get current API key to preserve it
+    const apiKey = store.get('apiKey', '');
+
+    // Clear all chat history
+    chatHistoryStore.clear();
+
+    // Clear in-memory conversations
+    conversationHistory.clear();
+
+    // Clear settings and restore defaults with preserved API key
+    store.clear();
+    store.set('apiKey', apiKey);
+
+    // Reload the app
+    if (mainWindow) {
+      mainWindow.reload();
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Error resetting Akira:', error);
+    return false;
+  }
+});
+
+// ============ Cache Management IPC Handlers ============
+
+// Get cache statistics
+ipcMain.handle('get-cache-stats', () => {
+  return getCacheStats();
+});
+
+// Clear response cache
+ipcMain.handle('clear-response-cache', () => {
+  clearCache();
   return true;
 });

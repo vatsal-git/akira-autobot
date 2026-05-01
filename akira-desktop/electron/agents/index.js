@@ -4,6 +4,33 @@
  */
 
 const { BaseAgent } = require('./base-agent');
+const {
+  startTask,
+  awaitTasks,
+  awaitAllPending,
+  getPendingTasks,
+  getTaskStatus,
+  getSystemStats,
+  cancelAllPendingTasks
+} = require('./async-task-manager');
+const {
+  parseTask,
+  extractTaskString,
+  formatMetadataPrefix,
+  applyDefaults,
+  createTaskMeta
+} = require('./task');
+const {
+  getAgentSummaryForPrompt,
+  getAgentListForTool,
+  validateTaskForAgent
+} = require('./capabilities');
+const {
+  createEmergencyStopTool,
+  createClarificationTool,
+  isEmergencyStopped,
+  clearEmergencyState
+} = require('./control');
 
 // Agent registry - populated when agents are registered
 const agents = new Map();
@@ -58,25 +85,42 @@ function getAgentInfoList() {
  *
  * @param {Object} params - Execution parameters
  * @param {string} params.agentName - Name of agent to execute
- * @param {string} params.task - The task to perform
+ * @param {string|Object} params.task - The task to perform (string or TaskDefinition)
+ * @param {Object} [params.scope] - Task scope (do/dont lists)
+ * @param {Object} [params.output] - Output configuration (visibility, format)
+ * @param {Object} [params.execution] - Execution configuration
  * @param {Array} params.conversationHistory - Previous messages for context
  * @param {string} params.context - Additional context
  * @param {Object} params.apiConfig - API configuration
  * @param {Function} params.onEvent - Event callback
  * @param {AbortSignal} params.signal - Cancellation signal
  * @param {string} params.parentAgent - Name of calling agent (for tracking)
+ * @param {string} params.taskType - Type of task: 'assigned' (directive) or 'request' (can decline)
  * @returns {Promise<Object>}
  */
 async function executeAgent({
   agentName,
   task,
+  scope,
+  output,
+  execution,
   conversationHistory = [],
   context = '',
   apiConfig,
   onEvent,
   signal,
-  parentAgent = null
+  parentAgent = null,
+  taskType = 'assigned'
 }) {
+  // Check for emergency stop
+  if (isEmergencyStopped()) {
+    return {
+      success: false,
+      error: 'Execution blocked - emergency stop is active',
+      emergencyStopped: true
+    };
+  }
+
   const agent = getAgent(agentName);
   if (!agent) {
     return {
@@ -93,12 +137,42 @@ async function executeAgent({
     };
   }
 
+  // Build structured task definition
+  let taskDef;
+  if (typeof task === 'object' && task.task) {
+    // Already a task definition
+    taskDef = task;
+  } else {
+    // Build from parameters
+    taskDef = {
+      task: typeof task === 'string' ? task : extractTaskString(task),
+      scope: scope || {},
+      output: output || { visibility: 'user' },
+      execution: execution || {}
+    };
+  }
+
+  // Add metadata
+  taskDef._meta = createTaskMeta({
+    fromAgent: parentAgent || 'user',
+    toAgent: agentName,
+    depth: currentExecutionDepth
+  });
+
+  // Validate task for agent
+  const validation = validateTaskForAgent(agentName, taskDef.task);
+  if (validation.warnings.length > 0) {
+    console.warn(`[agents] Task validation warnings for ${agentName}:`, validation.warnings);
+  }
+
   // Track execution
   const executionId = `${agentName}-${Date.now()}`;
   activeExecutions.set(executionId, {
     agent: agentName,
-    task,
+    task: taskDef.task,
+    taskDef,
     parentAgent,
+    taskType,
     startTime: Date.now()
   });
 
@@ -108,7 +182,10 @@ async function executeAgent({
       type: 'agent_delegate',
       fromAgent: parentAgent,
       toAgent: agentName,
-      task: task
+      task: taskDef.task,
+      taskType: taskType,
+      visibility: taskDef.output?.visibility || 'user',
+      hasScope: !!(taskDef.scope?.do?.length || taskDef.scope?.dont?.length)
     });
   }
 
@@ -116,7 +193,7 @@ async function executeAgent({
 
   try {
     const result = await agent.execute({
-      task,
+      task: taskDef,
       context,
       conversationHistory,
       apiConfig,
@@ -137,55 +214,385 @@ async function executeAgent({
  * These are injected into specialized agents
  */
 function createAgentCommunicationTools(currentAgentName, apiConfig, onEvent, signal) {
+  const otherSpecialists = Array.from(agents.keys()).filter(n => n !== currentAgentName && n !== 'akira');
+
+  // Get emergency stop and clarification tool definitions
+  const emergencyStopTool = createEmergencyStopTool();
+  const clarificationTool = createClarificationTool();
+
   const definitions = [
     {
-      name: 'request_agent_help',
-      description: `Request help from another specialized agent. Available agents: ${Array.from(agents.keys()).filter(n => n !== currentAgentName && n !== 'orchestrator').join(', ')}`,
+      name: 'list_agents',
+      description: 'Get a list of available agents and their capabilities. Use this to discover what agents you can collaborate with.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          detail: {
+            type: 'string',
+            enum: ['summary', 'full'],
+            description: 'Level of detail: summary (default) or full capabilities'
+          }
+        },
+        required: []
+      }
+    },
+    {
+      name: 'assign_task',
+      description: `Assign a task to another agent with optional scope and visibility control. This is a directive - the target agent must execute it.`,
       input_schema: {
         type: 'object',
         properties: {
           agent: {
             type: 'string',
-            enum: Array.from(agents.keys()).filter(n => n !== currentAgentName && n !== 'orchestrator'),
-            description: 'Name of the agent to request help from'
+            enum: otherSpecialists,
+            description: 'Name of the agent to assign the task to'
           },
           task: {
             type: 'string',
-            description: 'What you need the other agent to do'
+            description: 'Clear description of what the agent needs to do'
+          },
+          scope: {
+            type: 'object',
+            description: 'Task boundaries',
+            properties: {
+              do: { type: 'array', items: { type: 'string' }, description: 'Actions to take' },
+              dont: { type: 'array', items: { type: 'string' }, description: 'Actions to avoid' }
+            }
+          },
+          output: {
+            type: 'object',
+            description: 'Output configuration',
+            properties: {
+              visibility: {
+                type: 'string',
+                enum: ['user', 'internal', 'user-summary'],
+                description: 'user: show to user, internal: return to you only, user-summary: brief summary to user'
+              },
+              summaryHint: { type: 'string', description: 'Hint for generating summary (when visibility is user-summary)' }
+            }
           },
           context: {
             type: 'string',
-            description: 'Additional context to help the other agent'
+            description: 'Additional context to help the agent'
+          },
+          priority: {
+            type: 'string',
+            enum: ['normal', 'high'],
+            description: 'Task priority level (default: normal)'
+          },
+          run_type: {
+            type: 'string',
+            enum: ['sync', 'async'],
+            description: 'sync: wait for result (default). async: return task_id for parallel execution'
           }
         },
         required: ['agent', 'task']
       }
-    }
+    },
+    {
+      name: 'request_help',
+      description: `Request help from another agent. This is a request - the target agent may decline if they cannot help.`,
+      input_schema: {
+        type: 'object',
+        properties: {
+          agent: {
+            type: 'string',
+            enum: otherSpecialists,
+            description: 'Name of the agent to request help from'
+          },
+          question: {
+            type: 'string',
+            description: 'What you need help with or want to ask'
+          },
+          output: {
+            type: 'object',
+            description: 'Output configuration',
+            properties: {
+              visibility: {
+                type: 'string',
+                enum: ['user', 'internal', 'user-summary'],
+                description: 'Visibility of the response'
+              }
+            }
+          },
+          context: {
+            type: 'string',
+            description: 'Additional context for the request'
+          },
+          run_type: {
+            type: 'string',
+            enum: ['sync', 'async'],
+            description: 'sync: wait for result (default). async: return task_id for parallel execution'
+          }
+        },
+        required: ['agent', 'question']
+      }
+    },
+    {
+      name: 'escalate_to_orchestrator',
+      description: 'Escalate a task back to Akira for re-routing. Use when you cannot handle a task, need coordination across multiple agents, or the task is outside your capabilities.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          reason: {
+            type: 'string',
+            description: 'Why you are escalating this task'
+          },
+          task: {
+            type: 'string',
+            description: 'The task that needs to be handled'
+          },
+          attempted: {
+            type: 'string',
+            description: 'What you already tried (optional)'
+          }
+        },
+        required: ['reason', 'task']
+      }
+    },
+    {
+      name: 'await_tasks',
+      description: 'Wait for specific async tasks to complete and get their results.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          task_ids: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Array of task IDs to wait for. Omit to wait for all pending.'
+          },
+          timeout: {
+            type: 'number',
+            description: 'Max time to wait in milliseconds (default: 60000)'
+          }
+        },
+        required: []
+      }
+    },
+    {
+      name: 'get_pending_tasks',
+      description: 'Get list of all currently pending or running async tasks.',
+      input_schema: {
+        type: 'object',
+        properties: {},
+        required: []
+      }
+    },
+    {
+      name: 'get_task_status',
+      description: 'Get the status of a specific async task without waiting for it.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          task_id: {
+            type: 'string',
+            description: 'The task ID to check'
+          }
+        },
+        required: ['task_id']
+      }
+    },
+    // Add emergency stop tool
+    emergencyStopTool.definition,
+    // Add clarification tool
+    clarificationTool.definition
   ];
 
   const handlers = {
-    async request_agent_help(input) {
-      const { agent: targetAgent, task, context = '' } = input;
+    async list_agents(input) {
+      const { detail = 'summary' } = input || {};
+      const agentList = getAgentListForTool(detail);
 
-      // Don't allow calling self or orchestrator
+      // Filter out current agent
+      const filtered = agentList.filter(a => a.name !== currentAgentName && a.name !== 'akira');
+
+      return {
+        success: true,
+        your_name: currentAgentName,
+        available_agents: filtered
+      };
+    },
+
+    async assign_task(input) {
+      const { agent: targetAgent, task, scope, output, context = '', priority = 'normal', run_type = 'sync' } = input;
+
+      if (targetAgent === currentAgentName) {
+        return { success: false, error: 'Cannot assign task to yourself' };
+      }
+
+      const taskContext = priority === 'high' ? `[HIGH PRIORITY] ${context}` : context;
+
+      // Build execution params with structured task
+      const execParams = {
+        agentName: targetAgent,
+        task,
+        scope,
+        output: output || { visibility: 'user' },
+        context: taskContext,
+        apiConfig,
+        onEvent,
+        signal,
+        parentAgent: currentAgentName,
+        taskType: 'assigned'
+      };
+
+      if (run_type === 'async') {
+        const { taskId } = startTask({
+          name: `assign_task:${targetAgent}`,
+          type: 'agent',
+          metadata: {
+            agent: currentAgentName,
+            targetAgent,
+            task,
+            visibility: output?.visibility || 'user'
+          },
+          executor: () => executeAgent(execParams)
+        });
+
+        return {
+          success: true,
+          async: true,
+          task_id: taskId,
+          message: `Task assigned to ${targetAgent} asynchronously. Use await_tasks(["${taskId}"]) to get results.`
+        };
+      }
+
+      return await executeAgent(execParams);
+    },
+
+    async request_help(input) {
+      const { agent: targetAgent, question, output, context = '', run_type = 'sync' } = input;
+
       if (targetAgent === currentAgentName) {
         return { success: false, error: 'Cannot request help from yourself' };
       }
-      if (targetAgent === 'orchestrator') {
-        return { success: false, error: 'Cannot call orchestrator from specialized agent' };
-      }
 
-      const result = await executeAgent({
+      const execParams = {
         agentName: targetAgent,
-        task,
+        task: question,
+        output: output || { visibility: 'user' },
         context,
         apiConfig,
         onEvent,
         signal,
-        parentAgent: currentAgentName
-      });
+        parentAgent: currentAgentName,
+        taskType: 'request'
+      };
 
-      return result;
+      if (run_type === 'async') {
+        const { taskId } = startTask({
+          name: `request_help:${targetAgent}`,
+          type: 'agent',
+          metadata: {
+            agent: currentAgentName,
+            targetAgent,
+            question,
+            visibility: output?.visibility || 'user'
+          },
+          executor: () => executeAgent(execParams)
+        });
+
+        return {
+          success: true,
+          async: true,
+          task_id: taskId,
+          message: `Help requested from ${targetAgent} asynchronously. Use await_tasks(["${taskId}"]) to get results.`
+        };
+      }
+
+      return await executeAgent(execParams);
+    },
+
+    async escalate_to_orchestrator(input) {
+      const { reason, task, attempted = '' } = input;
+
+      const escalationContext = `Escalated from ${currentAgentName}.\nReason: ${reason}${attempted ? `\nAlready attempted: ${attempted}` : ''}`;
+
+      return await executeAgent({
+        agentName: 'akira',
+        task,
+        context: escalationContext,
+        apiConfig,
+        onEvent,
+        signal,
+        parentAgent: currentAgentName,
+        taskType: 'escalation'
+      });
+    },
+
+    async await_tasks(input) {
+      const { task_ids = [], timeout = 60000 } = input;
+
+      if (!task_ids || task_ids.length === 0) {
+        const result = await awaitAllPending(currentAgentName);
+        return {
+          success: true,
+          waited_for: 'all_pending',
+          ...result
+        };
+      }
+
+      const results = await awaitTasks(task_ids, timeout);
+
+      let successCount = 0;
+      let failCount = 0;
+      for (const taskId of Object.keys(results)) {
+        if (results[taskId].success) {
+          successCount++;
+        } else {
+          failCount++;
+        }
+      }
+
+      return {
+        success: failCount === 0,
+        summary: `${successCount} succeeded, ${failCount} failed`,
+        results
+      };
+    },
+
+    async get_pending_tasks() {
+      const pending = getPendingTasks(currentAgentName);
+      return {
+        success: true,
+        count: pending.length,
+        tasks: pending
+      };
+    },
+
+    async get_task_status(input) {
+      const { task_id } = input;
+      if (!task_id) {
+        return { success: false, error: 'task_id is required' };
+      }
+      return getTaskStatus(task_id);
+    },
+
+    // Emergency stop handler
+    async emergency_stop(input) {
+      return await emergencyStopTool.handler(input, {
+        agentName: currentAgentName,
+        onEvent,
+        cancelPendingTasks: () => cancelAllPendingTasks?.()
+      });
+    },
+
+    // Clarification handler
+    async request_clarification(input) {
+      // Get current task metadata from active executions
+      const activeExec = Array.from(activeExecutions.values())
+        .find(e => e.agent === currentAgentName);
+
+      const taskMeta = activeExec?.taskDef?._meta || {
+        fromAgent: 'akira',
+        toAgent: currentAgentName
+      };
+
+      return await clarificationTool.handler(input, {
+        taskMeta,
+        clarificationBudget: activeExec?.taskDef?.execution?.clarificationBudget || 2,
+        onEvent
+      });
     }
   };
 
@@ -193,20 +600,21 @@ function createAgentCommunicationTools(currentAgentName, apiConfig, onEvent, sig
 }
 
 /**
- * Create the delegate_agent tool for the orchestrator
+ * Create the delegate_agent tool for Akira (the orchestrator)
  */
 function createDelegateAgentTool(apiConfig, onEvent, signal) {
-  const specialistAgents = Array.from(agents.keys()).filter(n => n !== 'orchestrator');
+  const specialistAgents = Array.from(agents.keys()).filter(n => n !== 'akira');
+
+  // Get emergency stop tool
+  const emergencyStopTool = createEmergencyStopTool();
 
   const definitions = [
     {
       name: 'delegate_agent',
-      description: `Delegate a task to a specialized agent. Each agent has specific capabilities:\n${
-        specialistAgents.map(name => {
-          const agent = getAgent(name);
-          return `- ${name}: ${agent?.description || 'No description'}`;
-        }).join('\n')
-      }`,
+      description: `Delegate a task to a specialized agent with optional scope and visibility control.
+
+Agent capabilities:
+${getAgentSummaryForPrompt('brief')}`,
       input_schema: {
         type: 'object',
         properties: {
@@ -219,35 +627,196 @@ function createDelegateAgentTool(apiConfig, onEvent, signal) {
             type: 'string',
             description: 'Clear, specific task for the agent to complete'
           },
+          scope: {
+            type: 'object',
+            description: 'Define task boundaries',
+            properties: {
+              do: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Specific actions the agent SHOULD take'
+              },
+              dont: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Actions the agent should NOT take'
+              }
+            }
+          },
+          output: {
+            type: 'object',
+            description: 'Control how output is handled',
+            properties: {
+              visibility: {
+                type: 'string',
+                enum: ['user', 'internal', 'user-summary'],
+                description: 'user: full output to user, internal: return to you only, user-summary: brief summary to user'
+              },
+              format: {
+                type: 'string',
+                enum: ['text', 'json', 'structured'],
+                description: 'Expected output format'
+              },
+              summaryHint: {
+                type: 'string',
+                description: 'Hint for generating summary when visibility is user-summary'
+              }
+            }
+          },
           context: {
             type: 'string',
             description: 'Additional context or requirements'
+          },
+          run_type: {
+            type: 'string',
+            enum: ['sync', 'async'],
+            description: 'sync: wait for completion (default). async: return task_id for parallel execution'
           }
         },
         required: ['agent', 'task']
       }
-    }
+    },
+    {
+      name: 'await_tasks',
+      description: 'Wait for specific async tasks to complete and get their results.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          task_ids: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Array of task IDs to wait for. Omit to wait for all pending.'
+          },
+          timeout: {
+            type: 'number',
+            description: 'Max time to wait in milliseconds (default: 60000)'
+          }
+        },
+        required: []
+      }
+    },
+    {
+      name: 'get_pending_tasks',
+      description: 'Get list of all currently pending or running async tasks.',
+      input_schema: {
+        type: 'object',
+        properties: {},
+        required: []
+      }
+    },
+    {
+      name: 'get_system_stats',
+      description: 'Get current system resource usage and concurrency limits.',
+      input_schema: {
+        type: 'object',
+        properties: {},
+        required: []
+      }
+    },
+    // Emergency stop for Akira
+    emergencyStopTool.definition
   ];
 
   const handlers = {
     async delegate_agent(input) {
-      const { agent: targetAgent, task, context = '' } = input;
+      const { agent: targetAgent, task, scope, output, context = '', run_type = 'sync' } = input;
 
-      if (targetAgent === 'orchestrator') {
-        return { success: false, error: 'Cannot delegate to orchestrator' };
+      if (targetAgent === 'akira') {
+        return { success: false, error: 'Cannot delegate to Akira (self)' };
       }
 
-      const result = await executeAgent({
+      // Build execution params with structured task support
+      const execParams = {
         agentName: targetAgent,
         task,
+        scope,
+        output: output || { visibility: 'user' },
         context,
         apiConfig,
         onEvent,
         signal,
-        parentAgent: 'orchestrator'
-      });
+        parentAgent: 'akira',
+        taskType: 'assigned'
+      };
 
-      return result;
+      if (run_type === 'async') {
+        const { taskId } = startTask({
+          name: `delegate:${targetAgent}`,
+          type: 'agent',
+          metadata: {
+            agent: 'akira',
+            targetAgent,
+            task,
+            visibility: output?.visibility || 'user'
+          },
+          executor: () => executeAgent(execParams)
+        });
+
+        return {
+          success: true,
+          async: true,
+          task_id: taskId,
+          message: `Task delegated to ${targetAgent} asynchronously. Use await_tasks(["${taskId}"]) to get results.`
+        };
+      }
+
+      return await executeAgent(execParams);
+    },
+
+    async await_tasks(input) {
+      const { task_ids = [], timeout = 60000 } = input;
+
+      if (!task_ids || task_ids.length === 0) {
+        const result = await awaitAllPending();
+        return {
+          success: true,
+          waited_for: 'all_pending',
+          ...result
+        };
+      }
+
+      const results = await awaitTasks(task_ids, timeout);
+
+      let successCount = 0;
+      let failCount = 0;
+      for (const taskId of Object.keys(results)) {
+        if (results[taskId].success) {
+          successCount++;
+        } else {
+          failCount++;
+        }
+      }
+
+      return {
+        success: failCount === 0,
+        summary: `${successCount} succeeded, ${failCount} failed`,
+        results
+      };
+    },
+
+    async get_pending_tasks() {
+      const pending = getPendingTasks();
+      return {
+        success: true,
+        count: pending.length,
+        tasks: pending
+      };
+    },
+
+    async get_system_stats() {
+      return {
+        success: true,
+        ...getSystemStats()
+      };
+    },
+
+    // Emergency stop handler for Akira
+    async emergency_stop(input) {
+      return await emergencyStopTool.handler(input, {
+        agentName: 'akira',
+        onEvent,
+        cancelPendingTasks: () => cancelAllPendingTasks?.()
+      });
     }
   };
 
@@ -295,5 +864,19 @@ module.exports = {
   resetExecutionState,
 
   // For type checking
-  BaseAgent
+  BaseAgent,
+
+  // Re-export from submodules for convenience
+  // Task utilities
+  parseTask,
+  extractTaskString,
+
+  // Capabilities
+  getAgentSummaryForPrompt,
+  getAgentListForTool,
+  validateTaskForAgent,
+
+  // Control utilities
+  isEmergencyStopped,
+  clearEmergencyState
 };

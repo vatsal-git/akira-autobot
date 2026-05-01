@@ -3,6 +3,40 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import '../styles/message-list.css';
 import { AgentActivityChip, AgentDelegationChip } from './AgentActivityChip';
+import { EmergencyStopAlert, ClarificationRequest, InternalTaskIndicator } from './AlertComponents';
+
+// Regex to match @path patterns (paths starting with @ followed by drive letter or /)
+const FILE_PATH_REGEX = /@([A-Za-z]:[^\s\n]+|\/[^\s\n]+)/g;
+
+// Render text with @path patterns styled as monospace
+function renderTextWithFilePaths(text) {
+  if (!text) return null;
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+  const regex = new RegExp(FILE_PATH_REGEX.source, 'g');
+
+  while ((match = regex.exec(text)) !== null) {
+    // Add text before the match
+    if (match.index > lastIndex) {
+      parts.push(text.substring(lastIndex, match.index));
+    }
+    // Add the @path as a styled span
+    parts.push(
+      <span key={match.index} className="message__file-path">
+        {match[0]}
+      </span>
+    );
+    lastIndex = regex.lastIndex;
+  }
+
+  // Add remaining text
+  if (lastIndex < text.length) {
+    parts.push(text.substring(lastIndex));
+  }
+
+  return parts.length > 0 ? parts : text;
+}
 
 // Helper to truncate long strings
 function truncateString(str, maxLength = 500) {
@@ -193,14 +227,17 @@ function CodeBlock({ className, children, ...props }) {
   );
 }
 
-function MessageList({ messages, isStreaming, onRegenerate, onContinue }) {
-  // Render user, assistant, tool, reasoning, and agent messages in chronological order
-  // Skip empty assistant messages (they shouldn't exist in the new flow, but just in case)
+function MessageList({ messages, isStreaming, onRegenerate, onContinue, onEmergencyResponse, onClarificationResponse }) {
+  // Render user, assistant, tool, reasoning, agent, emergency, and clarification messages
+  // Skip empty assistant messages and internal-only items
   const displayMessages = messages.filter((m) => {
     if (m.type === 'tool') return true;
     if (m.type === 'reasoning') return true;
     if (m.type === 'agent') return true;
     if (m.type === 'delegation') return true;
+    if (m.type === 'emergency_stop') return true;
+    if (m.type === 'clarification') return true;
+    if (m.type === 'internal_task') return true; // Show working indicator
     if (m.role === 'user') return true;
     if (m.role === 'assistant') {
       // Keep only if has content
@@ -210,7 +247,7 @@ function MessageList({ messages, isStreaming, onRegenerate, onContinue }) {
   });
 
   // Helper to check if a message is a trail item (tool, reasoning, agent, delegation)
-  const isTrailItem = (m) => m && (m.type === 'tool' || m.type === 'reasoning' || m.type === 'agent' || m.type === 'delegation');
+  const isTrailItem = (m) => m && (m.type === 'tool' || m.type === 'reasoning' || m.type === 'agent' || m.type === 'delegation' || m.type === 'internal_task');
 
   // Create index mapping from display index to original messages index
   const getOriginalIndex = (displayIndex) => {
@@ -246,6 +283,20 @@ function MessageList({ messages, isStreaming, onRegenerate, onContinue }) {
           <AgentActivityChip key={`agent-${index}`} activity={message} isConnected={isConnected} />
         ) : message.type === 'delegation' ? (
           <AgentDelegationChip key={`delegation-${index}`} delegation={message} isConnected={isConnected} />
+        ) : message.type === 'emergency_stop' ? (
+          <EmergencyStopAlert
+            key={`emergency-${index}`}
+            alert={message}
+            onResponse={(response) => onEmergencyResponse?.(message, response)}
+          />
+        ) : message.type === 'clarification' ? (
+          <ClarificationRequest
+            key={`clarification-${message.clarificationId || index}`}
+            request={message}
+            onResponse={(response) => onClarificationResponse?.(message, response)}
+          />
+        ) : message.type === 'internal_task' ? (
+          <InternalTaskIndicator key={`internal-${index}`} task={message} />
         ) : (
           <Message
             key={index}
@@ -287,60 +338,42 @@ function Message({ message, isLast, isStreaming, onRegenerate, onContinue }) {
     >
       <div className="message__bubble">
         {isUser ? (
-          <div className="message__content">{message.content}</div>
+          <div className="message__content">{renderTextWithFilePaths(message.content)}</div>
         ) : (
           <div className="message__content message__content--markdown">
             {message.content ? (
-              <>
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    // Render code blocks
-                    code({ node, inline, className, children, ...props }) {
-                      return !inline ? (
-                        <CodeBlock className={className} {...props}>
-                          {children}
-                        </CodeBlock>
-                      ) : (
-                        <code className="message__inline-code" {...props}>
-                          {children}
-                        </code>
-                      );
-                    },
-                    // Make links open in browser
-                    a({ node, children, href, ...props }) {
-                      return (
-                        <a
-                          href={href}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          {...props}
-                        >
-                          {children}
-                        </a>
-                      );
-                    },
-                  }}
-                >
-                  {message.content}
-                </ReactMarkdown>
-                {isIncomplete && (
-                  <div className="message__incomplete-footer">
-                    <span className="message__incomplete-text">Response stopped</span>
-                    {onContinue && (
-                      <button
-                        className="message__continue-btn"
-                        onClick={onContinue}
-                        title="Continue generating"
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  // Render code blocks
+                  code({ node, inline, className, children, ...props }) {
+                    return !inline ? (
+                      <CodeBlock className={className} {...props}>
+                        {children}
+                      </CodeBlock>
+                    ) : (
+                      <code className="message__inline-code" {...props}>
+                        {children}
+                      </code>
+                    );
+                  },
+                  // Make links open in browser
+                  a({ node, children, href, ...props }) {
+                    return (
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        {...props}
                       >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                          <path d="M8 5v14l11-7z" />
-                        </svg>
-                      </button>
-                    )}
-                  </div>
-                )}
-              </>
+                        {children}
+                      </a>
+                    );
+                  },
+                }}
+              >
+                {message.content}
+              </ReactMarkdown>
             ) : isStreaming ? (
               <span className="message__typing">
                 <span className="message__typing-dot" />
@@ -351,6 +384,23 @@ function Message({ message, isLast, isStreaming, onRegenerate, onContinue }) {
           </div>
         )}
       </div>
+      {/* Incomplete response footer - outside bubble, minimal */}
+      {isIncomplete && !isStreaming && (
+        <div className="message__incomplete-footer">
+          <span className="message__incomplete-text">Response stopped</span>
+          {onContinue && (
+            <button
+              className="message__continue-btn"
+              onClick={onContinue}
+              title="Continue"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            </button>
+          )}
+        </div>
+      )}
       {/* Flash response indicator - outside bubble, subtle */}
       {isCached && !isStreaming && (
         <div className="message__flash-footer">

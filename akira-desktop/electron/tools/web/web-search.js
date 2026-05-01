@@ -6,6 +6,7 @@
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
+const { startTask } = require('../../agents/async-task-manager');
 
 /**
  * Simple HTML to text conversion
@@ -93,7 +94,7 @@ function fetchUrl(url, options = {}) {
 const definitions = [
   {
     name: 'web_search',
-    description: 'Search the web using DuckDuckGo. Returns search results with titles and snippets.',
+    description: 'Search the web using DuckDuckGo. Returns search results with titles and snippets. Use run_type: "async" for parallel searches.',
     input_schema: {
       type: 'object',
       properties: {
@@ -105,60 +106,91 @@ const definitions = [
           type: 'integer',
           description: 'Number of results to return (default: 5, max: 10)',
         },
+        run_type: {
+          type: 'string',
+          enum: ['sync', 'async'],
+          description: 'sync: wait for result (default). async: return task_id for parallel execution',
+        },
       },
       required: ['query'],
     },
   },
 ];
 
+/**
+ * Core search execution (used by both sync and async modes)
+ */
+async function executeSearch(query, resultsCount) {
+  // Use DuckDuckGo HTML search (no API key needed)
+  const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+
+  const response = await fetchUrl(searchUrl);
+
+  if (response.statusCode !== 200) {
+    return { success: false, error: `Search returned status ${response.statusCode}` };
+  }
+
+  // Parse DuckDuckGo results
+  const results = [];
+  const resultRegex = /<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+
+  let match;
+  while ((match = resultRegex.exec(response.data)) !== null && results.length < resultsCount) {
+    const url = match[1];
+    const title = htmlToText(match[2]);
+    const snippet = htmlToText(match[3]);
+
+    if (title && url) {
+      results.push({ title, snippet, url });
+    }
+  }
+
+  // Fallback: simpler regex for results
+  if (results.length === 0) {
+    const simpleRegex = /<a[^>]+class="result__a"[^>]*>([^<]+)<\/a>/gi;
+    while ((match = simpleRegex.exec(response.data)) !== null && results.length < resultsCount) {
+      results.push({ title: htmlToText(match[1]), snippet: '', url: '' });
+    }
+  }
+
+  return {
+    success: true,
+    query,
+    results,
+    count: results.length,
+  };
+}
+
 const handlers = {
   async web_search(input) {
     const query = (input.query || '').trim();
     const resultsCount = Math.min(input.results_count || 5, 10);
+    const runType = input.run_type || 'sync';
 
     if (!query) {
       return { success: false, error: 'Query is required' };
     }
 
-    try {
-      // Use DuckDuckGo HTML search (no API key needed)
-      const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-
-      const response = await fetchUrl(searchUrl);
-
-      if (response.statusCode !== 200) {
-        return { success: false, error: `Search returned status ${response.statusCode}` };
-      }
-
-      // Parse DuckDuckGo results
-      const results = [];
-      const resultRegex = /<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
-
-      let match;
-      while ((match = resultRegex.exec(response.data)) !== null && results.length < resultsCount) {
-        const url = match[1];
-        const title = htmlToText(match[2]);
-        const snippet = htmlToText(match[3]);
-
-        if (title && url) {
-          results.push({ title, snippet, url });
-        }
-      }
-
-      // Fallback: simpler regex for results
-      if (results.length === 0) {
-        const simpleRegex = /<a[^>]+class="result__a"[^>]*>([^<]+)<\/a>/gi;
-        while ((match = simpleRegex.exec(response.data)) !== null && results.length < resultsCount) {
-          results.push({ title: htmlToText(match[1]), snippet: '', url: '' });
-        }
-      }
+    // Async execution - return task_id immediately
+    if (runType === 'async') {
+      const { taskId } = startTask({
+        name: `web_search: ${query.slice(0, 40)}${query.length > 40 ? '...' : ''}`,
+        type: 'web',
+        metadata: { query, resultsCount },
+        executor: () => executeSearch(query, resultsCount)
+      });
 
       return {
         success: true,
-        query,
-        results,
-        count: results.length,
+        async: true,
+        task_id: taskId,
+        message: `Search started asynchronously. Use await_tasks(["${taskId}"]) to get results.`
       };
+    }
+
+    // Sync execution
+    try {
+      return await executeSearch(query, resultsCount);
     } catch (error) {
       return { success: false, error: error.message, query };
     }

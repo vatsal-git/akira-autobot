@@ -10,6 +10,8 @@ const getMemoryAgentPrompt = require('../prompts/memory-agent');
 const storeMemory = require('../../tools/memory/store-memory');
 const searchMemories = require('../../tools/memory/search-memories');
 const listMemories = require('../../tools/memory/list-memories');
+const deleteMemory = require('../../tools/memory/delete-memory');
+const updateMemory = require('../../tools/memory/update-memory');
 
 /**
  * Create Memory Agent instance
@@ -22,6 +24,8 @@ function createMemoryAgent(communicationTools = { definitions: [], handlers: {} 
     ...storeMemory.definitions,
     ...searchMemories.definitions,
     ...listMemories.definitions,
+    ...deleteMemory.definitions,
+    ...updateMemory.definitions,
     ...communicationTools.definitions
   ];
 
@@ -29,12 +33,14 @@ function createMemoryAgent(communicationTools = { definitions: [], handlers: {} 
     ...storeMemory.handlers,
     ...searchMemories.handlers,
     ...listMemories.handlers,
+    ...deleteMemory.handlers,
+    ...updateMemory.handlers,
     ...communicationTools.handlers
   };
 
   return new BaseAgent({
-    name: 'memory',
-    displayName: 'Memory Agent',
+    name: 'smriti',
+    displayName: 'Smriti',
     description: 'Store, search, and manage long-term memories',
     systemPrompt: getMemoryAgentPrompt(),
     toolDefinitions,

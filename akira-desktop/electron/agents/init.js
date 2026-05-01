@@ -85,7 +85,7 @@ function createExecutionContext({ apiConfig, onEvent, signal }) {
   const delegateTool = createDelegateAgentTool(apiConfig, onEvent, signal);
 
   // Get orchestrator and update its tools
-  const orchestrator = getAgent('orchestrator');
+  const orchestrator = getAgent('akira');
   if (orchestrator) {
     orchestrator.toolDefinitions = delegateTool.definitions;
     orchestrator.toolHandlers = delegateTool.handlers;
@@ -93,7 +93,7 @@ function createExecutionContext({ apiConfig, onEvent, signal }) {
   }
 
   // Update specialist agents with communication tools
-  const specialists = ['file', 'system', 'web', 'memory', 'desktop'];
+  const specialists = ['dobby', 'vektor', 'samba', 'smriti', 'beneges'];
   for (const name of specialists) {
     const agent = getAgent(name);
     if (agent) {
@@ -168,9 +168,9 @@ async function runOrchestrator({ message, conversationHistory = [], apiConfig, o
   // Create fresh execution context
   createExecutionContext({ apiConfig, onEvent, signal });
 
-  // Execute orchestrator
+  // Execute Akira (orchestrator)
   const result = await executeAgent({
-    agentName: 'orchestrator',
+    agentName: 'akira',
     task: message,
     conversationHistory,
     context: '',
@@ -202,6 +202,14 @@ function isInitialized() {
 }
 
 /**
+ * Get current API configuration
+ * Used by tools that need to make API calls (e.g., vision analysis)
+ */
+function getCurrentApiConfig() {
+  return currentApiConfig;
+}
+
+/**
  * Get list of available agents for UI
  */
 function getAvailableAgents() {
@@ -215,6 +223,14 @@ const {
   removeCacheEntry
 } = require('./response-cache');
 
+// Re-export control functions for main.js
+const {
+  submitUserResponse: submitEmergencyResponse,
+  clearEmergencyState,
+  getEmergencyState,
+  submitClarificationResponse
+} = require('./control');
+
 module.exports = {
   initializeAgents,
   runOrchestrator,
@@ -222,8 +238,14 @@ module.exports = {
   isInitialized,
   getAvailableAgents,
   createExecutionContext,
+  getCurrentApiConfig,
   // Cache functions
   clearCache,
   getCacheStats,
-  removeCacheEntry
+  removeCacheEntry,
+  // Control functions
+  submitEmergencyResponse,
+  clearEmergencyState,
+  getEmergencyState,
+  submitClarificationResponse
 };

@@ -13,8 +13,8 @@ const getOrchestratorPrompt = require('./prompts/orchestrator');
  */
 function createOrchestratorAgent(delegateTool = { definitions: [], handlers: {} }) {
   return new BaseAgent({
-    name: 'orchestrator',
-    displayName: 'Orchestrator',
+    name: 'akira',
+    displayName: 'Akira',
     description: 'Routes user requests to specialized agents and coordinates multi-agent tasks',
     systemPrompt: getOrchestratorPrompt(),
     toolDefinitions: delegateTool.definitions,

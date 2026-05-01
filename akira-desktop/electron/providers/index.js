@@ -11,6 +11,27 @@ const PROVIDER_TYPES = {
 };
 
 const providers = {
+  openai: {
+    id: 'openai',
+    name: 'OpenAI',
+    apiEndpoint: 'https://api.openai.com/v1/chat/completions',
+    apiKeyPlaceholder: 'sk-...',
+    defaultModel: 'gpt-4o',
+    docsUrl: 'https://platform.openai.com/api-keys',
+    supportsTools: true,
+    supportsStreaming: true,
+
+    buildHeaders: (apiKey) => ({
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    }),
+
+    // OpenAI native format (default)
+    transformRequest: null,
+    transformResponse: null,
+    parseStream: null
+  },
+
   openrouter: {
     id: 'openrouter',
     name: 'OpenRouter',

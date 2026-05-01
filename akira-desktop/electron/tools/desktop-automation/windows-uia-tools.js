@@ -1,12 +1,13 @@
 /**
  * Windows UI Automation Tools
  * windows_uia - Access Windows UI Automation for window/element control
+ * Upgraded to use spawn() for better control
  */
 
-const { exec } = require('child_process');
-const util = require('util');
-
-const execPromise = util.promisify(exec);
+const { spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
 
 const IS_WINDOWS = process.platform === 'win32';
 const MAX_WINDOWS = 50;
@@ -25,31 +26,86 @@ function truncate(s, n = MAX_NAME_LEN) {
 }
 
 /**
- * Execute PowerShell command with better error handling
+ * Execute PowerShell command using spawn() by writing to a temp .ps1 file
  */
 async function runPowerShell(script, timeout = 30000) {
   if (!IS_WINDOWS) {
     throw new Error('windows_uia is only available on Windows');
   }
 
-  try {
-    const { stdout, stderr } = await execPromise(
-      `powershell -NoProfile -ExecutionPolicy Bypass -Command "${script.replace(/"/g, '\\"')}"`,
-      { timeout, maxBuffer: 10 * 1024 * 1024 }
-    );
+  const scriptFile = path.join(os.tmpdir(), `uia_script_${Date.now()}_${Math.random().toString(36).slice(2)}.ps1`);
 
-    if (stderr && stderr.trim()) {
-      console.warn('[windows-uia] PowerShell stderr:', stderr.trim());
+  return new Promise((resolve, reject) => {
+    try {
+      fs.writeFileSync(scriptFile, script, 'utf8');
+    } catch (err) {
+      return reject(new Error(`Failed to write script file: ${err.message}`));
     }
 
-    return { stdout: stdout.trim(), stderr: stderr.trim() };
-  } catch (error) {
-    console.error('[windows-uia] PowerShell error:', error.message);
-    if (error.stderr) {
-      console.error('[windows-uia] PowerShell stderr:', error.stderr);
-    }
-    throw new Error(`PowerShell failed: ${error.message}${error.stderr ? ' - ' + error.stderr : ''}`);
-  }
+    const child = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptFile], {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let killed = false;
+    const maxBuffer = 10 * 1024 * 1024;
+
+    const timeoutId = setTimeout(() => {
+      killed = true;
+      child.kill('SIGTERM');
+      setTimeout(() => {
+        if (!child.killed) child.kill('SIGKILL');
+      }, 1000);
+    }, timeout);
+
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+      if (stdout.length > maxBuffer) {
+        killed = true;
+        child.kill('SIGTERM');
+      }
+    });
+
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    const cleanup = () => {
+      try {
+        if (fs.existsSync(scriptFile)) fs.unlinkSync(scriptFile);
+      } catch {}
+    };
+
+    child.on('close', (code) => {
+      clearTimeout(timeoutId);
+      cleanup();
+
+      if (stderr && stderr.trim()) {
+        console.warn('[windows-uia] PowerShell stderr:', stderr.trim());
+      }
+
+      if (killed) {
+        reject(new Error(`PowerShell timed out after ${timeout}ms`));
+      } else if (code !== 0) {
+        const fullError = [
+          `Exit code ${code}`,
+          stdout ? `stdout: ${stdout.substring(0, 500)}` : '',
+          stderr ? `stderr: ${stderr.substring(0, 500)}` : ''
+        ].filter(Boolean).join(' | ');
+        reject(new Error(`PowerShell failed: ${fullError}`));
+      } else {
+        resolve({ stdout: stdout.trim(), stderr: stderr.trim() });
+      }
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timeoutId);
+      cleanup();
+      reject(new Error(`PowerShell spawn error: ${err.message}`));
+    });
+  });
 }
 
 /**

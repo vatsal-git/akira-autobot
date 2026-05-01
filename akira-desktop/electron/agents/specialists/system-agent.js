@@ -30,8 +30,8 @@ function createSystemAgent(communicationTools = { definitions: [], handlers: {} 
   };
 
   return new BaseAgent({
-    name: 'system',
-    displayName: 'System Agent',
+    name: 'vektor',
+    displayName: 'Vektor',
     description: 'Execute shell commands and system operations',
     systemPrompt: getSystemAgentPrompt(),
     toolDefinitions,

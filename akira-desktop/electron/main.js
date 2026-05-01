@@ -1,13 +1,55 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, globalShortcut, screen, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, globalShortcut, screen, nativeImage, clipboard } = require('electron');
 const path = require('path');
+const os = require('os');
 const Store = require('electron-store');
+
+// Get Windows version (for Win10 vs Win11 detection)
+function getWindowsVersion() {
+  if (process.platform !== 'win32') return null;
+  const release = os.release(); // e.g., "10.0.22621" for Win11
+  const buildNumber = parseInt(release.split('.')[2], 10);
+  return { release, buildNumber, isWin11: buildNumber >= 22000 };
+}
+
+// Get platform-specific blur/vibrancy options
+function getBlurOptions() {
+  const platform = process.platform;
+
+  if (platform === 'darwin') {
+    // macOS: Use native vibrancy
+    return {
+      vibrancy: 'under-window',
+      visualEffectState: 'active',
+      transparent: true,
+      backgroundColor: '#00000000'
+    };
+  }
+
+  if (platform === 'win32') {
+    // Windows 10/11: Use transparent background only
+    // Note: backgroundMaterial: 'acrylic' causes a visible box behind the window
+    return {
+      transparent: true,
+      backgroundColor: '#00000000'
+    };
+  }
+
+  // Linux: No native blur, use transparent fallback
+  return {
+    transparent: true,
+    backgroundColor: '#00000000'
+  };
+}
 
 // Import tools (for backward compatibility)
 const { executeTool, getToolsForAPI, getToolsWithCategories } = require('./tools');
 const { getSystemPrompt } = require('./system-prompt');
 
+// Import execute-command for streaming setup
+const { setOutputEmitter } = require('./tools/system/execute-command');
+
 // Import multi-agent system
-const { runOrchestrator, initializeAgents, getAvailableAgents, setWorkspaceRoot, clearCache, getCacheStats } = require('./agents/init');
+const { runOrchestrator, initializeAgents, getAvailableAgents, setWorkspaceRoot, clearCache, getCacheStats, submitEmergencyResponse, submitClarificationResponse } = require('./agents/init');
 
 // Import provider system
 const { getProviderList, getProvider } = require('./providers');
@@ -45,6 +87,7 @@ const store = new Store({
 let mainWindow = null;
 let tray = null;
 let currentCornerIndex = 3; // Start at bottom-right
+let isQuitting = false; // Track if app is truly quitting vs window close
 
 // Cleanup tray on process exit (handles dev server termination)
 const cleanupTray = () => {
@@ -149,6 +192,9 @@ function createWindow() {
     config.y = Math.round(workArea.y + workArea.height - COMPACT_HEIGHT - MARGIN);
   }
 
+  // Get platform-specific blur options
+  const blurOptions = getBlurOptions();
+
   mainWindow = new BrowserWindow({
     title: 'Akira',
     width: config.width,
@@ -156,15 +202,14 @@ function createWindow() {
     x: config.x,
     y: config.y,
     frame: config.frame,
-    transparent: config.transparent,
     alwaysOnTop: config.alwaysOnTop,
     skipTaskbar: config.skipTaskbar,
     resizable: true,
     minWidth: 320,
     minHeight: 400,
-    backgroundColor: '#00000000', // Fully transparent background
     hasShadow: false, // Disable native shadow to prevent white box
     icon: path.join(__dirname, 'icons', 'icon.ico'),
+    ...blurOptions, // Apply platform-specific blur/vibrancy
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -183,6 +228,21 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+
+  // Intercept close (X button) - hide to tray instead of destroying
+  mainWindow.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+    }
+  });
+
+  // Disable Ctrl+W (prevent accidental window close)
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.control && input.key.toLowerCase() === 'w') {
+      event.preventDefault();
+    }
   });
 
   // Track visibility changes
@@ -338,6 +398,13 @@ app.whenReady().then(async () => {
   createTray();
   registerGlobalShortcut();
 
+  // Set up command output streaming emitter
+  setOutputEmitter((data) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('command-output', data);
+    }
+  });
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
@@ -358,6 +425,7 @@ app.on('will-quit', () => {
 });
 
 app.on('before-quit', () => {
+  isQuitting = true;
   if (tray) {
     tray.destroy();
     tray = null;
@@ -439,6 +507,45 @@ ipcMain.handle('get-draft-text', () => {
 ipcMain.handle('set-draft-text', (event, text) => {
   store.set('draftText', text);
   return true;
+});
+
+// Clipboard file paths (cross-platform)
+ipcMain.handle('get-clipboard-file-paths', () => {
+  // Try text/uri-list first (Mac/Linux)
+  const uriList = clipboard.read('text/uri-list');
+  if (uriList) {
+    return uriList
+      .split('\n')
+      .filter(line => line.startsWith('file://'))
+      .map(uri => {
+        // Handle file:// URIs - remove prefix and decode
+        let path = uri.replace(/^file:\/\//, '');
+        // On Windows, file URIs have an extra slash: file:///C:/path
+        if (process.platform === 'win32' && path.startsWith('/')) {
+          path = path.substring(1);
+        }
+        return decodeURIComponent(path);
+      });
+  }
+
+  // Windows: read FileNameW format (CF_HDROP)
+  if (process.platform === 'win32') {
+    try {
+      const buffer = clipboard.readBuffer('FileNameW');
+      if (buffer && buffer.length > 0) {
+        // FileNameW is null-terminated UTF-16LE strings, double-null at end
+        let str = buffer.toString('utf16le');
+        // Remove trailing nulls and split by null
+        str = str.replace(/\0+$/, '');
+        const parts = str.split('\0');
+        return parts.filter(p => p.length > 0);
+      }
+    } catch (e) {
+      // No file paths in clipboard
+    }
+  }
+
+  return [];
 });
 
 // Window control
@@ -565,7 +672,17 @@ ipcMain.handle('set-widget-mode', async (event, mode) => {
 
   // Update window properties without recreation
   mainWindow.setAlwaysOnTop(config.alwaysOnTop, config.alwaysOnTop ? 'screen-saver' : undefined);
+
+  // On Windows, setSkipTaskbar doesn't always take effect while visible
+  // Hide briefly, apply the setting, then show again
+  const wasVisible = mainWindow.isVisible();
+  if (wasVisible && process.platform === 'win32') {
+    mainWindow.hide();
+  }
   mainWindow.setSkipTaskbar(config.skipTaskbar);
+  if (wasVisible && process.platform === 'win32') {
+    mainWindow.show();
+  }
 
   // Animate to new bounds
   await animateBounds({
@@ -737,6 +854,64 @@ ipcMain.handle('move-window', (event, { deltaX, deltaY }) => {
     mainWindow.setPosition(x + deltaX, y + deltaY);
   }
   return true;
+});
+
+// Move window by direction (Ctrl+A + arrow key shortcut)
+ipcMain.handle('move-window-direction', (event, direction) => {
+  if (!mainWindow) return false;
+
+  const widgetMode = store.get('widgetMode', 'compact');
+  const workArea = screen.getPrimaryDisplay().workArea;
+
+  // Window mode: no movement shortcuts
+  if (widgetMode === 'window') return false;
+
+  if (widgetMode === 'sidebar') {
+    // Sidebar mode: only left/right movement
+    if (direction === 'left') {
+      store.set('corner', 'left');
+      mainWindow.setPosition(workArea.x, workArea.y, true);
+    } else if (direction === 'right') {
+      store.set('corner', 'right');
+      mainWindow.setPosition(workArea.x + workArea.width - SIDEBAR_WIDTH, workArea.y, true);
+    }
+    return store.get('corner');
+  }
+
+  // Compact mode: move to corner based on direction
+  const currentCorner = store.get('corner', 'bottom-right');
+  let newCorner = currentCorner;
+
+  // Parse current position
+  const isTop = currentCorner.includes('top');
+  const isLeft = currentCorner.includes('left');
+
+  switch (direction) {
+    case 'up':
+      // Move to top, keep horizontal position
+      newCorner = isLeft ? 'top-left' : 'top-right';
+      break;
+    case 'down':
+      // Move to bottom, keep horizontal position
+      newCorner = isLeft ? 'bottom-left' : 'bottom-right';
+      break;
+    case 'left':
+      // Move to left, keep vertical position
+      newCorner = isTop ? 'top-left' : 'bottom-left';
+      break;
+    case 'right':
+      // Move to right, keep vertical position
+      newCorner = isTop ? 'top-right' : 'bottom-right';
+      break;
+  }
+
+  // Apply the new corner position
+  store.set('corner', newCorner);
+  currentCornerIndex = CORNERS.indexOf(newCorner);
+  const { x, y } = getCornerPosition(newCorner);
+  mainWindow.setPosition(x, y, true);
+
+  return newCorner;
 });
 
 // OpenRouter API
@@ -1336,6 +1511,30 @@ ipcMain.handle('delete-chat', (event, chatId) => {
   conversationHistory.delete(chatId);
 
   return true;
+});
+
+// ============ Emergency Stop and Clarification IPC Handlers ============
+
+// Handle user response to emergency stop
+ipcMain.handle('submit-emergency-response', (event, response) => {
+  try {
+    submitEmergencyResponse(response);
+    return { success: true };
+  } catch (error) {
+    console.error('Error submitting emergency response:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Handle user response to clarification request
+ipcMain.handle('submit-clarification-response', (event, { clarificationId, response }) => {
+  try {
+    submitClarificationResponse(clarificationId, response);
+    return { success: true };
+  } catch (error) {
+    console.error('Error submitting clarification response:', error);
+    return { success: false, error: error.message };
+  }
 });
 
 // Reset Akira - clear all data except API key, then reload

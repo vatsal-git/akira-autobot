@@ -14,9 +14,23 @@ const desktopWait = require('../../tools/desktop-automation/desktop-wait');
 const desktopDiagnose = require('../../tools/desktop-automation/desktop-diagnose');
 
 // Import optional tools with error handling
+let desktopSmartClick = { definitions: [], handlers: {} };
+let desktopAnalyzeImage = { definitions: [], handlers: {} };
 let windowsUiaTools = { definitions: [], handlers: {} };
 let cameraTools = { definitions: [], handlers: {} };
 let uiParseTools = { definitions: [], handlers: {} };
+
+try {
+  desktopSmartClick = require('../../tools/desktop-automation/desktop-smart-click');
+} catch (e) {
+  console.log('[desktop-agent] Smart click tools not available:', e.message);
+}
+
+try {
+  desktopAnalyzeImage = require('../../tools/desktop-automation/desktop-analyze-image');
+} catch (e) {
+  console.log('[desktop-agent] Analyze image tools not available:', e.message);
+}
 
 try {
   windowsUiaTools = require('../../tools/desktop-automation/windows-uia-tools');
@@ -49,6 +63,8 @@ function createDesktopAgent(communicationTools = { definitions: [], handlers: {}
     ...desktopScreenQuery.definitions,
     ...desktopWait.definitions,
     ...desktopDiagnose.definitions,
+    ...desktopSmartClick.definitions,
+    ...desktopAnalyzeImage.definitions,
     ...windowsUiaTools.definitions,
     ...cameraTools.definitions,
     ...uiParseTools.definitions,
@@ -61,6 +77,8 @@ function createDesktopAgent(communicationTools = { definitions: [], handlers: {}
     ...desktopScreenQuery.handlers,
     ...desktopWait.handlers,
     ...desktopDiagnose.handlers,
+    ...desktopSmartClick.handlers,
+    ...desktopAnalyzeImage.handlers,
     ...windowsUiaTools.handlers,
     ...cameraTools.handlers,
     ...uiParseTools.handlers,
@@ -68,8 +86,8 @@ function createDesktopAgent(communicationTools = { definitions: [], handlers: {}
   };
 
   return new BaseAgent({
-    name: 'desktop',
-    displayName: 'Desktop Agent',
+    name: 'beneges',
+    displayName: 'BeneGes',
     description: 'Desktop automation: mouse, keyboard, screenshots, and UI interaction',
     systemPrompt: getDesktopAgentPrompt(),
     toolDefinitions,

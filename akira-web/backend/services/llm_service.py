@@ -400,6 +400,28 @@ def _compact_stale_tool_results(messages: list) -> None:
         messages[i] = {**msg, "content": new_blocks}
 
 
+def _strip_thinking_blocks_from_messages(messages: list) -> None:
+    """Remove thinking and redacted_thinking blocks from assistant messages.
+
+    Anthropic's API validates cryptographic signatures on thinking blocks. If the content
+    was modified, truncated, or corrupted between turns, validation fails with
+    'Invalid data in redacted_thinking block'. Since thinking blocks are for transparency
+    only and the model doesn't need to reference them, strip them before sending.
+    """
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        filtered = [
+            block for block in content
+            if not isinstance(block, dict) or block.get("type") not in ("thinking", "redacted_thinking")
+        ]
+        if len(filtered) != len(content):
+            msg["content"] = filtered if filtered else [{"type": "text", "text": ""}]
+
+
 def _load_system_prompt_from_file(path: str) -> str | None:
     """Load system prompt from a file. Returns None if file missing or unreadable."""
     try:
@@ -977,6 +999,7 @@ class LLM_Service(LLM_Tools):
                 text_content = ""
 
                 _compact_stale_tool_results(messages)
+                _strip_thinking_blocks_from_messages(messages)
                 messages = self._trim_messages_for_context_budget(
                     messages,
                     active_system_prompt,
@@ -1330,6 +1353,7 @@ class LLM_Service(LLM_Tools):
                 text_content = ""
 
                 _compact_stale_tool_results(messages)
+                _strip_thinking_blocks_from_messages(messages)
                 messages = self._trim_messages_for_context_budget(
                     messages,
                     active_system_prompt,

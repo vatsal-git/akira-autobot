@@ -85,10 +85,6 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
   const [models, setModels] = useState([]);
   const [apiKey, setApiKey] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
-  const [toolCategories, setToolCategories] = useState({});
-  const [disabledTools, setDisabledTools] = useState(new Set());
-  const [expandedCategories, setExpandedCategories] = useState(new Set());
-  const [toolsExpanded, setToolsExpanded] = useState(false);
   const [internalView, setInternalView] = useState('general'); // 'general' or 'model'
 
   // Provider state
@@ -113,7 +109,6 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
 
   useEffect(() => {
     loadModels();
-    loadTools();
     loadProviders();
   }, []);
 
@@ -121,105 +116,8 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
   useEffect(() => {
     if (settings) {
       setLocalSettings(settings);
-      // Also sync disabledTools
-      setDisabledTools(new Set(settings.disabledTools || []));
     }
   }, [settings]);
-
-  // Load tools with categories
-  const loadTools = async () => {
-    try {
-      const categories = await window.akira.getToolsWithCategories();
-      setToolCategories(categories);
-      const disabled = new Set(settings?.disabledTools || []);
-      setDisabledTools(disabled);
-    } catch (error) {
-      console.error('Error loading tools:', error);
-    }
-  };
-
-  // Toggle individual tool
-  const toggleTool = async (toolName) => {
-    const newDisabled = new Set(disabledTools);
-    if (newDisabled.has(toolName)) {
-      newDisabled.delete(toolName);
-    } else {
-      newDisabled.add(toolName);
-    }
-    setDisabledTools(newDisabled);
-    await updateSetting('disabledTools', [...newDisabled]);
-  };
-
-  // Toggle all tools in a category
-  const toggleCategory = async (category, e) => {
-    if (e) e.stopPropagation();
-    const categoryTools = toolCategories[category] || [];
-    const categoryToolNames = categoryTools.map(t => t.name);
-    const allDisabled = categoryToolNames.every(name => disabledTools.has(name));
-
-    const newDisabled = new Set(disabledTools);
-    if (allDisabled) {
-      // Enable all in category
-      categoryToolNames.forEach(name => newDisabled.delete(name));
-    } else {
-      // Disable all in category
-      categoryToolNames.forEach(name => newDisabled.add(name));
-    }
-    setDisabledTools(newDisabled);
-    await updateSetting('disabledTools', [...newDisabled]);
-  };
-
-  // Check if category is fully enabled, partially enabled, or fully disabled
-  const getCategoryState = (category) => {
-    const categoryTools = toolCategories[category] || [];
-    if (categoryTools.length === 0) return 'enabled';
-    const disabledCount = categoryTools.filter(t => disabledTools.has(t.name)).length;
-    if (disabledCount === 0) return 'enabled';
-    if (disabledCount === categoryTools.length) return 'disabled';
-    return 'partial';
-  };
-
-  // Toggle category expand/collapse
-  const toggleCategoryExpanded = (category) => {
-    const newExpanded = new Set(expandedCategories);
-    if (newExpanded.has(category)) {
-      newExpanded.delete(category);
-    } else {
-      newExpanded.add(category);
-    }
-    setExpandedCategories(newExpanded);
-  };
-
-  // Toggle all tools (master switch)
-  const toggleAllTools = async (e) => {
-    if (e) e.stopPropagation();
-    const allToolNames = Object.values(toolCategories).flat().map(t => t.name);
-    const allEnabled = disabledTools.size === 0;
-
-    if (allEnabled) {
-      // Disable all
-      setDisabledTools(new Set(allToolNames));
-      await updateSetting('disabledTools', allToolNames);
-    } else {
-      // Enable all
-      setDisabledTools(new Set());
-      await updateSetting('disabledTools', []);
-    }
-  };
-
-  // Get master toggle state
-  const getMasterToggleState = () => {
-    const allToolNames = Object.values(toolCategories).flat().map(t => t.name);
-    if (allToolNames.length === 0) return 'enabled';
-    if (disabledTools.size === 0) return 'enabled';
-    if (disabledTools.size === allToolNames.length) return 'disabled';
-    return 'partial';
-  };
-
-  // Format category name for display
-  const formatCategoryName = (category) => {
-    return category.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-  };
 
   const loadModels = async () => {
     try {
@@ -438,79 +336,6 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
         </p>
       </div>
 
-      {/* Tools */}
-      <div className="settings-panel__section">
-        <div
-          className="settings-panel__section-header settings-panel__section-header--clickable"
-          onClick={() => setToolsExpanded(!toolsExpanded)}
-        >
-          <span className={`settings-panel__category-chevron ${toolsExpanded ? 'settings-panel__category-chevron--expanded' : ''}`}>
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M9 18l6-6-6-6" />
-            </svg>
-          </span>
-          <h3 className="settings-panel__section-title">Tools</h3>
-          <button
-            className={`settings-panel__toggle settings-panel__toggle--small ${getMasterToggleState() !== 'disabled' ? 'settings-panel__toggle--active' : ''} ${getMasterToggleState() === 'partial' ? 'settings-panel__toggle--partial' : ''}`}
-            onClick={toggleAllTools}
-          >
-            <span className="settings-panel__toggle-slider" />
-          </button>
-        </div>
-
-        {toolsExpanded && Object.entries(toolCategories).map(([category, tools]) => {
-          const isExpanded = expandedCategories.has(category);
-          const categoryState = getCategoryState(category);
-
-          return (
-            <div key={category} className="settings-panel__tool-category">
-              <div
-                className="settings-panel__category-header"
-                onClick={() => toggleCategoryExpanded(category)}
-              >
-                <span className={`settings-panel__category-chevron ${isExpanded ? 'settings-panel__category-chevron--expanded' : ''}`}>
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M9 18l6-6-6-6" />
-                  </svg>
-                </span>
-                <span className="settings-panel__category-name">{formatCategoryName(category)}</span>
-                <span className="settings-panel__category-count">
-                  {tools.filter(t => !disabledTools.has(t.name)).length}/{tools.length}
-                </span>
-                <button
-                  className={`settings-panel__toggle settings-panel__toggle--small ${categoryState !== 'disabled' ? 'settings-panel__toggle--active' : ''} ${categoryState === 'partial' ? 'settings-panel__toggle--partial' : ''}`}
-                  onClick={(e) => toggleCategory(category, e)}
-                >
-                  <span className="settings-panel__toggle-slider" />
-                </button>
-              </div>
-
-              {isExpanded && (
-                <div className="settings-panel__tool-list">
-                  {tools.map(tool => (
-                    <div key={tool.name} className="settings-panel__tool-item">
-                      <span className="settings-panel__tool-name">{tool.name}</span>
-                      <span className="settings-panel__tool-info" title={tool.description}>
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <circle cx="12" cy="12" r="10" />
-                          <path d="M12 16v-4M12 8h.01" />
-                        </svg>
-                      </span>
-                      <button
-                        className={`settings-panel__toggle settings-panel__toggle--small ${!disabledTools.has(tool.name) ? 'settings-panel__toggle--active' : ''}`}
-                        onClick={() => toggleTool(tool.name)}
-                      >
-                        <span className="settings-panel__toggle-slider" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
       {/* Reset */}
       <div className="settings-panel__section">
         <button
@@ -679,30 +504,18 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
         </p>
       </div>
 
-      {/* Creativity & Reasoning - two in a row */}
-      <div className="settings-panel__row settings-panel__row--2">
-        <div className="settings-panel__section">
-          <h3 className="settings-panel__section-title">Creativity</h3>
-          <Dropdown
-            value={localSettings.temperature || 0.7}
-            onChange={(val) => updateSetting('temperature', parseFloat(val))}
-            options={[
-              { value: 0.3, label: 'Low' },
-              { value: 0.7, label: 'Medium' },
-              { value: 1.3, label: 'High' },
-            ]}
-          />
-        </div>
-
-        <div className="settings-panel__section">
-          <h3 className="settings-panel__section-title">Reasoning</h3>
-          <button
-            className={`settings-panel__toggle ${localSettings.reasoningEnabled !== false ? 'settings-panel__toggle--active' : ''}`}
-            onClick={() => updateSetting('reasoningEnabled', !localSettings.reasoningEnabled)}
-          >
-            <span className="settings-panel__toggle-slider" />
-          </button>
-        </div>
+      {/* Creativity */}
+      <div className="settings-panel__section">
+        <h3 className="settings-panel__section-title">Creativity</h3>
+        <Dropdown
+          value={localSettings.temperature || 0.7}
+          onChange={(val) => updateSetting('temperature', parseFloat(val))}
+          options={[
+            { value: 0.3, label: 'Low' },
+            { value: 0.7, label: 'Medium' },
+            { value: 1.3, label: 'High' },
+          ]}
+        />
       </div>
 
       {/* Max Tokens & Thinking Budget */}
@@ -738,13 +551,12 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
             min="1000"
             max="100000"
             step="1000"
-            disabled={localSettings.reasoningEnabled === false}
           />
         </div>
+        <p className="settings-panel__hint">
+          Max tokens must be greater than thinking budget.
+        </p>
       </div>
-      <p className="settings-panel__hint">
-        Max tokens must be greater than thinking budget when reasoning is enabled.
-      </p>
     </div>
   );
 

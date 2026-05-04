@@ -5,7 +5,7 @@
 
 .chat-input__wrapper {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 8px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -29,6 +29,7 @@
   color: var(--color-text);
   min-height: 24px;
   max-height: 120px;
+  padding: 0;
 }
 
 .chat-input__textarea:focus {
@@ -98,6 +99,56 @@
   }
 }
 
+/* File path chips */
+.chat-input__file-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+  max-height: 80px;
+  overflow-y: auto;
+}
+
+.chat-input__file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  max-width: 100%;
+}
+
+.chat-input__file-chip-path {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}
+
+.chat-input__file-chip-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+  transition: all var(--transition);
+}
+
+.chat-input__file-chip-remove:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--color-text);
+}
+
 /* ============ Light Mode Overrides ============ */
 .theme-light .chat-input__wrapper {
   background: rgba(0, 0, 0, 0.03);
@@ -123,4 +174,13 @@
 
 .theme-light .chat-input__live:hover {
   background: rgba(0, 0, 0, 0.12);
+}
+
+.theme-light .chat-input__file-chip {
+  background: rgba(0, 0, 0, 0.05);
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+.theme-light .chat-input__file-chip-remove:hover {
+  background: rgba(0, 0, 0, 0.08);
 }

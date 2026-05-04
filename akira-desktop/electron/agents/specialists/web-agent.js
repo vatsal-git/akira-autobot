@@ -30,8 +30,8 @@ function createWebAgent(communicationTools = { definitions: [], handlers: {} }) 
   };
 
   return new BaseAgent({
-    name: 'web',
-    displayName: 'Web Agent',
+    name: 'samba',
+    displayName: 'Samba',
     description: 'Search the internet and fetch content from webpages',
     systemPrompt: getWebAgentPrompt(),
     toolDefinitions,

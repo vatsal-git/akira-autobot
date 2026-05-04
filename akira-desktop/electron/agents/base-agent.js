@@ -5,6 +5,9 @@
 
 const { executeTool } = require('../tools');
 const { callProvider } = require('../providers/adapter');
+const { startTask } = require('./async-task-manager');
+const { parseTask, formatTaskForPrompt, extractTaskString, isInternalTask, requiresSummary } = require('./task');
+const { isEmergencyStopped } = require('./control');
 
 // Maximum iterations to prevent infinite loops
 const MAX_TOOL_ITERATIONS = 20;
@@ -66,6 +69,120 @@ const SUMMARIZABLE_TOOLS = [
  */
 function isOcrTool(toolName) {
   return OCR_TOOLS.includes(toolName);
+}
+
+/**
+ * Generate a summary of content based on hint
+ * @param {*} content - Content to summarize
+ * @param {string} hint - Summary hint
+ * @returns {string}
+ */
+function generateSummary(content, hint) {
+  if (!content) return 'Task completed';
+
+  // If there's a hint, try to generate guided summary
+  if (hint) {
+    const hintLower = hint.toLowerCase();
+
+    // Count-based hints
+    if (hintLower.includes('count')) {
+      if (Array.isArray(content)) {
+        return `Found ${content.length} items`;
+      }
+      if (typeof content === 'object' && content.count !== undefined) {
+        return `Count: ${content.count}`;
+      }
+    }
+
+    // Status hints
+    if (hintLower.includes('status')) {
+      if (typeof content === 'object') {
+        if (content.success !== undefined) {
+          return content.success ? '✓ Success' : `✗ Failed: ${content.error || 'Unknown error'}`;
+        }
+      }
+    }
+  }
+
+  // Auto-generate based on content type
+  if (typeof content === 'string') {
+    if (content.length <= 100) return content;
+    return content.substring(0, 97) + '...';
+  }
+
+  if (Array.isArray(content)) {
+    return `Completed with ${content.length} items`;
+  }
+
+  if (typeof content === 'object') {
+    if (content.success !== undefined) {
+      return content.success
+        ? '✓ Completed successfully'
+        : `✗ Failed: ${content.error || 'Unknown error'}`;
+    }
+    if (content.content) {
+      const text = String(content.content);
+      return text.length <= 100 ? text : text.substring(0, 97) + '...';
+    }
+  }
+
+  return 'Task completed';
+}
+
+/**
+ * Emit event with visibility handling
+ * @param {Object} event - Event to emit
+ * @param {Object} taskDef - Task definition with output.visibility
+ * @param {Function} onEvent - Event callback
+ */
+function emitWithVisibility(event, taskDef, onEvent) {
+  if (!onEvent) return;
+
+  const visibility = taskDef?.output?.visibility || 'user';
+
+  switch (event.type) {
+    case 'agent_start':
+    case 'thinking':
+    case 'tool_use':
+    case 'text_delta':
+      // Always show agent activity
+      onEvent({
+        ...event,
+        _visibility: 'activity'
+      });
+      break;
+
+    case 'agent_complete':
+    case 'tool_result':
+      if (visibility === 'user') {
+        // Full output to user
+        onEvent({ ...event, _visibility: 'full' });
+      } else if (visibility === 'user-summary') {
+        // Generate summary
+        const summary = generateSummary(
+          event.result || event.content,
+          taskDef?.output?.summaryHint
+        );
+        onEvent({
+          ...event,
+          _visibility: 'summary',
+          displayContent: summary,
+          fullContent: event.result || event.content
+        });
+      } else if (visibility === 'internal') {
+        // Mark as internal - UI can decide to hide or show minimal indicator
+        onEvent({
+          ...event,
+          _visibility: 'internal',
+          _suppressDisplay: true
+        });
+      }
+      break;
+
+    default:
+      // Pass through other events
+      onEvent({ ...event, _visibility: visibility });
+  }
 }
 
 /**
@@ -165,7 +282,7 @@ function filterMessageHistory(messages, keepRecentOcr = 2) {
 class BaseAgent {
   /**
    * @param {Object} config - Agent configuration
-   * @param {string} config.name - Agent name (e.g., 'file', 'web', 'orchestrator')
+   * @param {string} config.name - Agent name (e.g., 'dobby', 'samba', 'akira')
    * @param {string} config.displayName - Human-readable name for UI
    * @param {string} config.description - What this agent does
    * @param {string} config.systemPrompt - System prompt for this agent
@@ -183,6 +300,7 @@ class BaseAgent {
     // Runtime state
     this.isRunning = false;
     this.currentTask = null;
+    this.currentTaskDef = null;
   }
 
   /**
@@ -228,12 +346,12 @@ class BaseAgent {
 
   /**
    * Build messages array for LLM call
-   * @param {string} task - The task to perform
+   * @param {Object|string} taskDef - The task definition or string
    * @param {string} context - Additional context
    * @param {Array} conversationHistory - Previous messages
    * @returns {Array} Messages array for API
    */
-  buildMessages(task, context = '', conversationHistory = []) {
+  buildMessages(taskDef, context = '', conversationHistory = []) {
     const messages = [
       { role: 'system', content: this.systemPrompt }
     ];
@@ -243,10 +361,20 @@ class BaseAgent {
       messages.push(...conversationHistory);
     }
 
-    // Build the task message
-    let taskMessage = task;
+    // Build the task message - handle both structured and string tasks
+    let taskMessage;
+
+    if (typeof taskDef === 'object' && taskDef.task) {
+      // Structured task - format it properly
+      taskMessage = formatTaskForPrompt(taskDef);
+    } else if (typeof taskDef === 'string') {
+      taskMessage = taskDef;
+    } else {
+      taskMessage = extractTaskString(taskDef);
+    }
+
     if (context) {
-      taskMessage = `Context: ${context}\n\nTask: ${task}`;
+      taskMessage = `Context: ${context}\n\n${taskMessage}`;
     }
 
     messages.push({ role: 'user', content: taskMessage });
@@ -259,7 +387,7 @@ class BaseAgent {
    * This method should be overridden by specialized agents if they need custom behavior
    *
    * @param {Object} params - Execution parameters
-   * @param {string} params.task - The task to perform
+   * @param {string|Object} params.task - The task to perform (string or structured TaskDefinition)
    * @param {string} params.context - Additional context
    * @param {Array} params.conversationHistory - Previous messages for context
    * @param {Object} params.apiConfig - API configuration (apiKey, model, temperature)
@@ -268,20 +396,40 @@ class BaseAgent {
    * @returns {Promise<Object>} Execution result
    */
   async execute({ task, context = '', conversationHistory = [], apiConfig, onEvent, signal }) {
-    this.isRunning = true;
-    this.currentTask = task;
+    // Check for emergency stop
+    if (isEmergencyStopped()) {
+      return {
+        success: false,
+        error: 'Execution blocked - emergency stop is active',
+        emergencyStopped: true
+      };
+    }
 
-    // Emit agent start event
-    onEvent?.({
+    // Parse task into structured format
+    const { success: parseSuccess, task: parsedTask, error: parseError } = parseTask(task, {
+      fromAgent: 'akira',
+      toAgent: this.name
+    });
+
+    // Store parsed task for visibility handling
+    this.currentTaskDef = parseSuccess ? parsedTask : { task: extractTaskString(task), output: { visibility: 'user' } };
+    const taskString = extractTaskString(task);
+
+    this.isRunning = true;
+    this.currentTask = taskString;
+
+    // Emit agent start event with visibility
+    emitWithVisibility({
       type: 'agent_start',
       agent: this.name,
       displayName: this.displayName,
-      task: task
-    });
+      task: taskString,
+      hasScope: parseSuccess && (parsedTask.scope?.do?.length > 0 || parsedTask.scope?.dont?.length > 0)
+    }, this.currentTaskDef, onEvent);
 
     try {
       const result = await this.runConversationLoop({
-        task,
+        task: this.currentTaskDef,
         context,
         conversationHistory,
         apiConfig,
@@ -289,13 +437,13 @@ class BaseAgent {
         signal
       });
 
-      // Emit agent complete event
-      onEvent?.({
+      // Emit agent complete event with visibility handling
+      emitWithVisibility({
         type: 'agent_complete',
         agent: this.name,
         displayName: this.displayName,
         result: result
-      });
+      }, this.currentTaskDef, onEvent);
 
       return result;
 
@@ -310,6 +458,7 @@ class BaseAgent {
     } finally {
       this.isRunning = false;
       this.currentTask = null;
+      this.currentTaskDef = null;
     }
   }
 
@@ -328,6 +477,17 @@ class BaseAgent {
       // Check for cancellation
       if (signal?.aborted) {
         throw new Error('Agent execution cancelled');
+      }
+
+      // Check for emergency stop
+      if (isEmergencyStopped()) {
+        return {
+          success: false,
+          content: finalContent,
+          error: 'Emergency stop triggered',
+          emergencyStopped: true,
+          iterations
+        };
       }
 
       // Call LLM
@@ -371,47 +531,90 @@ class BaseAgent {
           toolArgs = {};
         }
 
+        // Extract run_type and remove from args passed to tool
+        const runType = toolArgs.run_type || 'sync';
+        delete toolArgs.run_type;
+
         // Emit tool use event
         onEvent?.({
           type: 'tool_use',
           agent: this.name,
           toolId: toolCall.id,
           name: toolName,
-          input: toolArgs
+          input: toolArgs,
+          runType: runType
         });
 
-        // Execute the tool
-        const toolResult = await this.executeTool(toolName, toolArgs);
+        let toolResult;
+        let toolMessage;
 
-        // Build tool result message, handling images specially
-        const toolMessage = {
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          _toolName: toolName, // Tag for history filtering
-        };
+        if (runType === 'async') {
+          // Start async task - returns immediately with task_id
+          const { taskId } = startTask({
+            name: `${toolName}`,
+            type: 'tool',
+            metadata: {
+              agent: this.name,
+              toolCallId: toolCall.id,
+              toolName: toolName
+            },
+            executor: () => this.executeTool(toolName, toolArgs)
+          });
 
-        // Check if result contains image data (e.g., from screenshot)
-        const imageData = extractImageData(toolResult);
-        if (imageData) {
-          // Store image separately for proper handling in provider adapter
-          toolMessage._imageData = imageData;
-          // Store non-image parts of result as content
-          const resultWithoutBase64 = removeBase64FromResult(toolResult);
-          toolMessage.content = JSON.stringify(resultWithoutBase64);
+          toolResult = {
+            success: true,
+            async: true,
+            task_id: taskId,
+            message: `Task started asynchronously. Use await_tasks(["${taskId}"]) to get results.`
+          };
+
+          // Emit async task started event
+          onEvent?.({
+            type: 'async_task_started',
+            agent: this.name,
+            toolId: toolCall.id,
+            taskId: taskId,
+            name: toolName
+          });
+
+          toolMessage = {
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            _toolName: toolName,
+            content: JSON.stringify(toolResult)
+          };
         } else {
-          toolMessage.content = JSON.stringify(toolResult);
+          // Sync execution - wait for result
+          toolResult = await this.executeTool(toolName, toolArgs);
+
+          // Build tool result message, handling images specially
+          toolMessage = {
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            _toolName: toolName,
+          };
+
+          // Check if result contains image data (e.g., from screenshot)
+          const imageData = extractImageData(toolResult);
+          if (imageData) {
+            toolMessage._imageData = imageData;
+            const resultWithoutBase64 = removeBase64FromResult(toolResult);
+            toolMessage.content = JSON.stringify(resultWithoutBase64);
+          } else {
+            toolMessage.content = JSON.stringify(toolResult);
+          }
+
+          // Emit tool result event with visibility
+          emitWithVisibility({
+            type: 'tool_result',
+            agent: this.name,
+            toolId: toolCall.id,
+            name: toolName,
+            result: toolResult
+          }, this.currentTaskDef, onEvent);
         }
 
         messages.push(toolMessage);
-
-        // Emit tool result event
-        onEvent?.({
-          type: 'tool_result',
-          agent: this.name,
-          toolId: toolCall.id,
-          name: toolName,
-          result: toolResult
-        });
       }
     }
 

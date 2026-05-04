@@ -1,21 +1,75 @@
 /**
  * UI Parse Tools
  * desktop_ui_parse - OCR-based UI element detection using Tesseract.js
+ * Upgraded to use spawn() for better control
  */
 
-const { exec } = require('child_process');
-const util = require('util');
+const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const Tesseract = require('tesseract.js');
 
-const execPromise = util.promisify(exec);
-
 // Tesseract.js worker instance (reused for performance)
 let tesseractWorker = null;
 
 const IS_WINDOWS = process.platform === 'win32';
+
+/**
+ * Execute a command using spawn with timeout and buffer limits
+ */
+function spawnCommand(command, args = [], options = {}) {
+  return new Promise((resolve, reject) => {
+    const { timeout = 60000, maxBuffer = 10 * 1024 * 1024, cwd } = options;
+
+    const child = spawn(command, args, {
+      cwd,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let killed = false;
+
+    const timeoutId = setTimeout(() => {
+      killed = true;
+      child.kill('SIGTERM');
+      setTimeout(() => {
+        if (!child.killed) child.kill('SIGKILL');
+      }, 1000);
+    }, timeout);
+
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+      if (stdout.length > maxBuffer) {
+        killed = true;
+        child.kill('SIGTERM');
+      }
+    });
+
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    child.on('close', (code) => {
+      clearTimeout(timeoutId);
+
+      if (killed) {
+        reject(Object.assign(new Error('Command timed out or exceeded buffer'), { stdout, stderr }));
+      } else if (code !== 0) {
+        reject(Object.assign(new Error(`Command failed with code ${code}`), { code, stdout, stderr }));
+      } else {
+        resolve({ stdout, stderr });
+      }
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timeoutId);
+      reject(Object.assign(err, { stdout, stderr }));
+    });
+  });
+}
 
 // Session store for parsed elements (mimics backend's screen_parse_session.py)
 const sessions = new Map();
@@ -73,7 +127,7 @@ function getSession(sessionId) {
 }
 
 /**
- * Execute PowerShell command by writing to a temp .ps1 file (avoids escaping issues)
+ * Execute PowerShell command using spawn() by writing to a temp .ps1 file
  */
 async function runPowerShell(script, options = {}) {
   if (!IS_WINDOWS) {
@@ -81,15 +135,17 @@ async function runPowerShell(script, options = {}) {
   }
 
   const timeout = options.timeout || 30000;
-  const scriptFile = path.join(os.tmpdir(), `ps_script_${Date.now()}.ps1`);
+  const scriptFile = path.join(os.tmpdir(), `ps_script_${Date.now()}_${Math.random().toString(36).slice(2)}.ps1`);
 
   try {
-    // Write script to temp file
     fs.writeFileSync(scriptFile, script, 'utf8');
 
-    // Execute the script file with STA mode for WinRT compatibility
-    const command = `powershell -NoProfile -ExecutionPolicy Bypass -STA -File "${scriptFile}"`;
-    const { stdout, stderr } = await execPromise(command, { timeout });
+    // Execute with STA mode for WinRT compatibility
+    const { stdout, stderr } = await spawnCommand(
+      'powershell',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', scriptFile],
+      { timeout }
+    );
 
     if (stderr && stderr.trim()) {
       console.warn('[ui-parse-tools] PowerShell stderr:', stderr.trim());
@@ -104,7 +160,6 @@ async function runPowerShell(script, options = {}) {
     if (error.stderr) {
       console.error('[ui-parse-tools] PowerShell stderr:', error.stderr);
     }
-    // Include full error details
     const fullError = [
       error.message,
       error.stdout ? `stdout: ${error.stdout}` : '',
@@ -112,14 +167,9 @@ async function runPowerShell(script, options = {}) {
     ].filter(Boolean).join(' | ');
     throw new Error(`PowerShell failed: ${fullError}`);
   } finally {
-    // Clean up script file
     try {
-      if (fs.existsSync(scriptFile)) {
-        fs.unlinkSync(scriptFile);
-      }
-    } catch (e) {
-      // Ignore cleanup errors
-    }
+      if (fs.existsSync(scriptFile)) fs.unlinkSync(scriptFile);
+    } catch {}
   }
 }
 
@@ -567,8 +617,9 @@ async function runTesseractOCR(imagePath, maxElements = 80, minConfidence = 25) 
 
   console.log(`[ui-parse-tools] Using Tesseract at: ${tesseractPath}`);
 
-  const { stdout } = await execPromise(
-    `"${tesseractPath}" "${imagePath}" stdout -c tessedit_create_tsv=1`,
+  const { stdout } = await spawnCommand(
+    tesseractPath,
+    [imagePath, 'stdout', '-c', 'tessedit_create_tsv=1'],
     { timeout: 60000, maxBuffer: 10 * 1024 * 1024 }
   );
 

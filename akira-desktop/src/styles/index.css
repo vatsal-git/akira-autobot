@@ -3,20 +3,21 @@
 /* Base styles - Dark Mode (default) */
 :root {
   --color-bg: transparent;
-  --color-surface: rgba(20, 20, 20, 0.85);
+  --color-surface: rgba(20, 20, 20, 0.88);
   --color-surface-hover: rgba(30, 30, 30, 0.9);
   --color-surface-solid: rgba(25, 25, 25, 0.95);
   --color-text: #f5f5f5;
-  --color-text-muted: #888;
+  --color-text-muted: #aaa;
   --color-primary: #fff;
   --color-primary-hover: #e0e0e0;
   --color-border: rgba(255, 255, 255, 0.08);
   --color-error: #ef4444;
   --color-success: #22c55e;
 
-  --radius: 12px;
-  --radius-sm: 8px;
-  --radius-lg: 16px;
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-lg: 12px;
+  --blur: 20px;
 
   --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.3);
   --shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
@@ -30,11 +31,11 @@
 /* Light Mode */
 :root.theme-light {
   --color-bg: transparent;
-  --color-surface: rgba(255, 255, 255, 0.92);
-  --color-surface-hover: rgba(245, 245, 245, 0.95);
-  --color-surface-solid: rgba(250, 250, 250, 0.98);
+  --color-surface: rgba(255, 255, 255, 0.88);
+  --color-surface-hover: rgba(245, 245, 245, 0.9);
+  --color-surface-solid: rgba(250, 250, 250, 0.95);
   --color-text: #1a1a1a;
-  --color-text-muted: #666;
+  --color-text-muted: #555;
   --color-primary: #1a1a1a;
   --color-primary-hover: #333;
   --color-border: rgba(0, 0, 0, 0.1);

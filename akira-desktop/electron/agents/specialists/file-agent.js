@@ -36,8 +36,8 @@ function createFileAgent(communicationTools = { definitions: [], handlers: {} })
   };
 
   return new BaseAgent({
-    name: 'file',
-    displayName: 'File Agent',
+    name: 'dobby',
+    displayName: 'Dobby',
     description: 'File system operations: reading, writing, patching files, and listing directories',
     systemPrompt: getFileAgentPrompt(),
     toolDefinitions,

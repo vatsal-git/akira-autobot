@@ -3,6 +3,7 @@ import ChatInput from './ChatInput';
 import MessageList from './MessageList';
 import SettingsPanel from './SettingsPanel';
 import '../styles/widget.css';
+import '../styles/alerts.css';
 
 const CORNERS = ['bottom-right', 'bottom-left', 'top-right', 'top-left'];
 const SIDEBAR_POSITIONS = ['right', 'left'];
@@ -131,6 +132,68 @@ function Widget({ settings, onSettingsChange }) {
       root.classList.add(`theme-${theme}`);
     }
   }, [settings?.theme]);
+
+  // Keyboard shortcut for moving window: Ctrl+A followed by arrow keys
+  useEffect(() => {
+    let moveMode = false;
+    let moveModeTimeout = null;
+
+    const handleKeyDown = (e) => {
+      const widgetMode = settings?.widgetMode || 'compact';
+
+      // Window mode has no movement shortcuts
+      if (widgetMode === 'window') return;
+
+      // Ctrl+A to enter move mode (but not if in a text input to avoid conflict with select-all)
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a') {
+        const tagName = e.target.tagName;
+        const isInput = tagName === 'INPUT' || tagName === 'TEXTAREA' || e.target.isContentEditable;
+
+        // In inputs, let Ctrl+A work normally for select-all
+        // User needs to click outside input first to use move shortcuts
+        if (isInput) return;
+
+        e.preventDefault();
+        moveMode = true;
+        clearTimeout(moveModeTimeout);
+        // Move mode expires after 1.5 seconds
+        moveModeTimeout = setTimeout(() => { moveMode = false; }, 1500);
+        return;
+      }
+
+      // Arrow keys in move mode
+      if (moveMode && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        e.preventDefault();
+        moveMode = false;
+        clearTimeout(moveModeTimeout);
+
+        // Map arrow to direction
+        const directionMap = {
+          'ArrowUp': 'up',
+          'ArrowDown': 'down',
+          'ArrowLeft': 'left',
+          'ArrowRight': 'right'
+        };
+        const direction = directionMap[e.key];
+
+        // Sidebar mode: only allow left/right
+        if (widgetMode === 'sidebar' && (direction === 'up' || direction === 'down')) {
+          return;
+        }
+
+        // Call IPC to move window
+        if (window.akira?.moveWindowDirection) {
+          window.akira.moveWindowDirection(direction);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      clearTimeout(moveModeTimeout);
+    };
+  }, [settings?.widgetMode]);
 
   // Preload voices for text-to-speech
   useEffect(() => {
@@ -283,22 +346,64 @@ function Widget({ settings, onSettingsChange }) {
         break;
 
       case 'agent_delegate':
-        // One agent delegating to another
-        setMessages(prev => [...prev, {
-          type: 'delegation',
-          fromAgent: data.data.fromAgent,
-          toAgent: data.data.toAgent,
-          task: data.data.task
-        }]);
+        // One agent delegating to another - check visibility
+        if (data.data.visibility !== 'internal') {
+          setMessages(prev => [...prev, {
+            type: 'delegation',
+            fromAgent: data.data.fromAgent,
+            toAgent: data.data.toAgent,
+            task: data.data.task,
+            visibility: data.data.visibility
+          }]);
+        }
         break;
 
       case 'agent_complete':
-        // Mark the agent as complete
-        setMessages(prev => prev.map(m =>
-          m.type === 'agent' && m.agent === data.data.agent && m.status === 'running'
-            ? { ...m, status: 'complete' }
-            : m
-        ));
+        // Mark the agent as complete - handle visibility for the result
+        setMessages(prev => prev.map(m => {
+          if (m.type === 'agent' && m.agent === data.data.agent && m.status === 'running') {
+            const visibility = data.data._visibility || 'full';
+            return {
+              ...m,
+              status: 'complete',
+              visibility,
+              // For user-summary, show the displayContent
+              displayContent: visibility === 'summary' ? data.data.displayContent : null
+            };
+          }
+          return m;
+        }));
+        break;
+
+      case 'emergency_stop':
+        // Add emergency stop alert to messages
+        setMessages(prev => [...prev, {
+          type: 'emergency_stop',
+          severity: data.data.severity,
+          reason: data.data.reason,
+          context: data.data.context,
+          triggeredBy: data.data.triggeredBy,
+          suggestedActions: data.data.suggestedActions,
+          requiresResponse: data.data.requiresResponse,
+          timestamp: data.data.timestamp,
+          resolved: false
+        }]);
+        break;
+
+      case 'clarification_needed':
+        // Add clarification request to messages
+        setMessages(prev => [...prev, {
+          type: 'clarification',
+          clarificationId: data.data.clarificationId,
+          fromAgent: data.data.fromAgent,
+          question: data.data.question,
+          whatIUnderstood: data.data.whatIUnderstood,
+          options: data.data.options,
+          canSkip: data.data.canSkip,
+          defaultAction: data.data.defaultAction,
+          timestamp: data.data.timestamp,
+          resolved: false
+        }]);
         break;
 
       case 'tool_use':
@@ -338,6 +443,22 @@ function Widget({ settings, onSettingsChange }) {
         // Speak any remaining content in live mode
         if (liveMode && currentContentRef.current) {
           speakText(currentContentRef.current, true);
+        }
+        // Play beep sound on generation complete
+        try {
+          const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          const oscillator = audioCtx.createOscillator();
+          const gainNode = audioCtx.createGain();
+          oscillator.connect(gainNode);
+          gainNode.connect(audioCtx.destination);
+          oscillator.frequency.value = 800;
+          oscillator.type = 'sine';
+          gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+          gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+          oscillator.start(audioCtx.currentTime);
+          oscillator.stop(audioCtx.currentTime + 0.15);
+        } catch (e) {
+          // Silently ignore audio errors
         }
         setSending(false);
         setStreaming(false);
@@ -559,6 +680,36 @@ function Widget({ settings, onSettingsChange }) {
     if (sending) return;
     handleSend('Continue');
   }, [sending, handleSend]);
+
+  // Handle emergency stop response from user
+  const handleEmergencyResponse = useCallback((alert, response) => {
+    // Mark the alert as resolved
+    setMessages(prev => prev.map(m =>
+      m.type === 'emergency_stop' && m.timestamp === alert.timestamp
+        ? { ...m, resolved: true, userResponse: response }
+        : m
+    ));
+
+    // Send response to backend
+    if (window.akira?.submitEmergencyResponse) {
+      window.akira.submitEmergencyResponse(response);
+    }
+  }, []);
+
+  // Handle clarification response from user
+  const handleClarificationResponse = useCallback((request, response) => {
+    // Mark the request as resolved
+    setMessages(prev => prev.map(m =>
+      m.type === 'clarification' && m.clarificationId === request.clarificationId
+        ? { ...m, resolved: true, userResponse: response }
+        : m
+    ));
+
+    // Send response to backend
+    if (window.akira?.submitClarificationResponse) {
+      window.akira.submitClarificationResponse(request.clarificationId, response);
+    }
+  }, []);
 
   // Start a new chat
   const handleNewChat = async () => {
@@ -836,7 +987,7 @@ function Widget({ settings, onSettingsChange }) {
           <span
             className="widget__title"
             style={!showSettings && !showHistory ? tubeInlineStyle : undefined}
-          >{showSettings ? (settingsView === 'model' ? 'Model Settings' : 'Settings') : showHistory ? 'History' : 'Akira'}</span>
+          >{showSettings ? (settingsView === 'model' ? 'Model Settings' : 'Settings') : showHistory ? 'History' : 'A'}</span>
         </div>
         <div className="widget__header-right">
           {!showSettings && !showHistory && (
@@ -994,8 +1145,8 @@ function Widget({ settings, onSettingsChange }) {
           <div className="widget__messages">
             {messages.length === 0 ? (
               <div className="widget__empty">
-                <p className="widget__empty-title" style={tubeInlineStyle}>Hi, I'm Akira</p>
-                <p className="widget__empty-subtitle">How can I help you today?</p>
+                <p className="widget__empty-title">Hi, I'm Akira</p>
+                <p className="widget__empty-subtitle">Ask, Automate, Delegate</p>
               </div>
             ) : (
               <>
@@ -1004,6 +1155,8 @@ function Widget({ settings, onSettingsChange }) {
                   isStreaming={streaming}
                   onRegenerate={handleRegenerate}
                   onContinue={handleContinue}
+                  onEmergencyResponse={handleEmergencyResponse}
+                  onClarificationResponse={handleClarificationResponse}
                 />
                 <div ref={messagesEndRef} />
               </>
@@ -1021,6 +1174,7 @@ function Widget({ settings, onSettingsChange }) {
               onLiveModeToggle={setLiveMode}
               onFocus={() => setIsInputFocused(true)}
               onBlur={() => setIsInputFocused(false)}
+              chatId={chatId}
             />
           </div>
         </>

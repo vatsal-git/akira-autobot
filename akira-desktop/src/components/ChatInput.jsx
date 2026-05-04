@@ -1,7 +1,10 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import '../styles/chat-input.css';
 
-function ChatInput({ onSend, onStop, disabled, isStreaming, liveMode, onLiveModeToggle, onFocus, onBlur }) {
+// Regex to match @path patterns (paths starting with @ followed by drive letter or /)
+const FILE_PATH_REGEX = /@([A-Za-z]:[^\s\n]+|\/[^\s\n]+)/g;
+
+function ChatInput({ onSend, onStop, disabled, isStreaming, liveMode, onLiveModeToggle, onFocus, onBlur, chatId }) {
   const [text, setText] = useState('');
   const [isListening, setIsListening] = useState(false);
   const textareaRef = useRef(null);
@@ -10,7 +13,7 @@ function ChatInput({ onSend, onStop, disabled, isStreaming, liveMode, onLiveMode
   const isListeningRef = useRef(false);
   const liveModeRef = useRef(false);
 
-  // Load draft text on mount
+  // Load draft text on mount, reset when chatId changes
   useEffect(() => {
     const loadDraft = async () => {
       if (window.akira?.getDraftText) {
@@ -20,6 +23,15 @@ function ChatInput({ onSend, onStop, disabled, isStreaming, liveMode, onLiveMode
     };
     loadDraft();
   }, []);
+
+  // Reset input when switching chats
+  useEffect(() => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    setText('');
+    window.akira?.setDraftText?.('');
+  }, [chatId]);
 
   // Save draft text with debounce
   const saveDraft = useCallback((value) => {
@@ -142,7 +154,10 @@ function ChatInput({ onSend, onStop, disabled, isStreaming, liveMode, onLiveMode
     if (text.trim() && !disabled) {
       onSend(text.trim());
       setText('');
-      // Clear draft on send
+      // Cancel any pending debounced save before clearing draft
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
       window.akira?.setDraftText?.('');
     }
   };
@@ -166,8 +181,80 @@ function ChatInput({ onSend, onStop, disabled, isStreaming, liveMode, onLiveMode
     }
   };
 
+  // Extract @paths from text for chip display
+  const filePaths = useMemo(() => {
+    const matches = text.match(FILE_PATH_REGEX);
+    if (!matches) return [];
+    // Remove @ prefix and dedupe
+    return [...new Set(matches.map(m => m.substring(1)))];
+  }, [text]);
+
+  // Handle paste - check for file paths in clipboard
+  const handlePaste = useCallback(async (e) => {
+    if (!window.akira?.getClipboardFilePaths) return;
+
+    try {
+      const paths = await window.akira.getClipboardFilePaths();
+      if (paths && paths.length > 0) {
+        e.preventDefault();
+        // Format paths with @ prefix, one per line
+        const pathsText = paths.map(p => `@${p}`).join('\n');
+        // Insert at cursor position
+        const textarea = textareaRef.current;
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const before = text.substring(0, start);
+        const after = text.substring(end);
+        // Add newline before if there's text before cursor
+        const prefix = before && !before.endsWith('\n') ? '\n' : '';
+        // Add newline after if there's text after cursor
+        const suffix = after && !after.startsWith('\n') ? '\n' : '';
+        const newText = before + prefix + pathsText + suffix + after;
+        setText(newText);
+        saveDraft(newText);
+      }
+    } catch (err) {
+      // Normal paste - let browser handle it
+    }
+  }, [text, saveDraft]);
+
+  // Remove a file path from text
+  const removeFilePath = useCallback((pathToRemove) => {
+    // Remove @path pattern (with optional preceding/trailing newline)
+    const escaped = pathToRemove.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`\\n?@${escaped}\\n?|@${escaped}`, 'g');
+    let newText = text.replace(regex, (match) => {
+      // If match has newlines on both sides, keep one
+      if (match.startsWith('\n') && match.endsWith('\n')) return '\n';
+      return '';
+    });
+    newText = newText.trim();
+    setText(newText);
+    saveDraft(newText);
+  }, [text, saveDraft]);
+
   return (
     <form className="chat-input" onSubmit={handleSubmit}>
+      {filePaths.length > 0 && (
+        <div className="chat-input__file-chips">
+          {filePaths.map((path, index) => (
+            <div key={index} className="chat-input__file-chip">
+              <span className="chat-input__file-chip-path">{path}</span>
+              <button
+                type="button"
+                className="chat-input__file-chip-remove"
+                onClick={() => removeFilePath(path)}
+                title="Remove file reference"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="chat-input__wrapper">
         <textarea
           ref={textareaRef}
@@ -175,9 +262,10 @@ function ChatInput({ onSend, onStop, disabled, isStreaming, liveMode, onLiveMode
           value={text}
           onChange={handleTextChange}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           onFocus={onFocus}
           onBlur={onBlur}
-          placeholder={liveMode ? "Listening... or type here" : "Ask Akira anything..."}
+          placeholder={liveMode ? "Listening... or type here" : "Type here..."}
           disabled={disabled}
           rows={1}
         />
@@ -201,23 +289,25 @@ function ChatInput({ onSend, onStop, disabled, isStreaming, liveMode, onLiveMode
             </svg>
           )}
         </button>
-        <button
-          type={isStreaming ? "button" : "submit"}
-          className="chat-input__send"
-          disabled={!isStreaming && (disabled || !text.trim())}
-          onClick={isStreaming ? onStop : undefined}
-          title={isStreaming ? "Stop generating" : "Send message"}
-        >
-          {isStreaming ? (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-              <rect x="6" y="6" width="12" height="12" rx="2" />
-            </svg>
-          ) : (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
-            </svg>
-          )}
-        </button>
+        {(text.trim() || isStreaming) && (
+          <button
+            type={isStreaming ? "button" : "submit"}
+            className="chat-input__send"
+            disabled={!isStreaming && (disabled || !text.trim())}
+            onClick={isStreaming ? onStop : undefined}
+            title={isStreaming ? "Stop generating" : "Send message"}
+          >
+            {isStreaming ? (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+              </svg>
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
+              </svg>
+            )}
+          </button>
+        )}
       </div>
     </form>
   );

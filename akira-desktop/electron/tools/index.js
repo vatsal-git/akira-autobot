@@ -15,6 +15,7 @@ const TOOL_CATEGORIES = [
   'web',
   'memory',
   'desktop-automation',
+  'async',
 ];
 
 // Folders to skip (not tool categories)

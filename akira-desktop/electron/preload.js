@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('akira', {
   autoRelocate: () => ipcRenderer.invoke('auto-relocate'),
   setCollapsed: (collapsed) => ipcRenderer.invoke('set-collapsed', collapsed),
   moveWindow: (deltaX, deltaY) => ipcRenderer.invoke('move-window', { deltaX, deltaY }),
+  moveWindowDirection: (direction) => ipcRenderer.invoke('move-window-direction', direction),
   setWidgetMode: (mode) => ipcRenderer.invoke('set-widget-mode', mode),
   toggleFullscreen: () => ipcRenderer.invoke('toggle-fullscreen'),
   isFullscreen: () => ipcRenderer.invoke('is-fullscreen'),
@@ -48,6 +49,9 @@ contextBridge.exposeInMainWorld('akira', {
   getDraftText: () => ipcRenderer.invoke('get-draft-text'),
   setDraftText: (text) => ipcRenderer.invoke('set-draft-text', text),
 
+  // Clipboard file paths
+  getClipboardFilePaths: () => ipcRenderer.invoke('get-clipboard-file-paths'),
+
   // Chat (uses send/on for streaming)
   sendMessage: (message, chatId, skipCache = false) => {
     ipcRenderer.send('send-message', { message, chatId, skipCache });
@@ -64,6 +68,10 @@ contextBridge.exposeInMainWorld('akira', {
   loadChat: (chatId) => ipcRenderer.invoke('load-chat', chatId),
   saveChat: (chatId, messages, title) => ipcRenderer.invoke('save-chat', { chatId, messages, title }),
   deleteChat: (chatId) => ipcRenderer.invoke('delete-chat', chatId),
+
+  // Emergency stop and clarification responses
+  submitEmergencyResponse: (response) => ipcRenderer.invoke('submit-emergency-response', response),
+  submitClarificationResponse: (clarificationId, response) => ipcRenderer.invoke('submit-clarification-response', { clarificationId, response }),
 
   // Event listeners
   onChatStream: (callback) => {
@@ -94,6 +102,12 @@ contextBridge.exposeInMainWorld('akira', {
     const handler = (event, mode) => callback(mode);
     ipcRenderer.on('widget-mode-changed', handler);
     return () => ipcRenderer.removeListener('widget-mode-changed', handler);
+  },
+
+  onCommandOutput: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('command-output', handler);
+    return () => ipcRenderer.removeListener('command-output', handler);
   },
 
   // Reset Akira

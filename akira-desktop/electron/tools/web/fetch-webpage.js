@@ -7,6 +7,7 @@ const https = require('https');
 const http = require('http');
 const { URL } = require('url');
 const zlib = require('zlib');
+const { startTask } = require('../../agents/async-task-manager');
 
 /**
  * Simple HTML to text conversion
@@ -120,7 +121,7 @@ function fetchUrl(url, options = {}) {
 const definitions = [
   {
     name: 'fetch_webpage',
-    description: 'Fetch and extract content from a webpage URL. Returns title and text content.',
+    description: 'Fetch and extract content from a webpage URL. Returns title and text content. Use run_type: "async" for parallel fetching.',
     input_schema: {
       type: 'object',
       properties: {
@@ -136,17 +137,55 @@ const definitions = [
           type: 'integer',
           description: 'Maximum content length to return (default: 50000)',
         },
+        run_type: {
+          type: 'string',
+          enum: ['sync', 'async'],
+          description: 'sync: wait for result (default). async: return task_id for parallel execution',
+        },
       },
       required: ['url'],
     },
   },
 ];
 
+/**
+ * Core fetch execution (used by both sync and async modes)
+ */
+async function executeFetch(url, extractContent, maxLength) {
+  const response = await fetchUrl(url, { timeout: 15000 });
+
+  if (response.statusCode !== 200) {
+    return { success: false, error: `HTTP status ${response.statusCode}`, url };
+  }
+
+  const html = response.data;
+  const title = extractTitle(html);
+
+  let content;
+  if (extractContent) {
+    content = htmlToText(html);
+    if (content.length > maxLength) {
+      content = content.substring(0, maxLength) + '\n\n[Content truncated...]';
+    }
+  } else {
+    content = html.substring(0, maxLength);
+  }
+
+  return {
+    success: true,
+    title,
+    content,
+    url,
+    content_type: response.headers['content-type'] || '',
+  };
+}
+
 const handlers = {
   async fetch_webpage(input) {
     const url = (input.url || '').trim();
     const extractContent = input.extract_main_content !== false;
     const maxLength = input.max_length || 50000;
+    const runType = input.run_type || 'sync';
 
     if (!url) {
       return { success: false, error: 'URL is required' };
@@ -159,33 +198,27 @@ const handlers = {
       return { success: false, error: 'Invalid URL format' };
     }
 
-    try {
-      const response = await fetchUrl(url, { timeout: 15000 });
-
-      if (response.statusCode !== 200) {
-        return { success: false, error: `HTTP status ${response.statusCode}`, url };
-      }
-
-      const html = response.data;
-      const title = extractTitle(html);
-
-      let content;
-      if (extractContent) {
-        content = htmlToText(html);
-        if (content.length > maxLength) {
-          content = content.substring(0, maxLength) + '\n\n[Content truncated...]';
-        }
-      } else {
-        content = html.substring(0, maxLength);
-      }
+    // Async execution - return task_id immediately
+    if (runType === 'async') {
+      const urlShort = url.length > 50 ? url.slice(0, 50) + '...' : url;
+      const { taskId } = startTask({
+        name: `fetch: ${urlShort}`,
+        type: 'web',
+        metadata: { url, extractContent, maxLength },
+        executor: () => executeFetch(url, extractContent, maxLength)
+      });
 
       return {
         success: true,
-        title,
-        content,
-        url,
-        content_type: response.headers['content-type'] || '',
+        async: true,
+        task_id: taskId,
+        message: `Fetch started asynchronously. Use await_tasks(["${taskId}"]) to get results.`
       };
+    }
+
+    // Sync execution
+    try {
+      return await executeFetch(url, extractContent, maxLength);
     } catch (error) {
       return { success: false, error: error.message, url };
     }

@@ -1,16 +1,88 @@
 /**
  * Shared PowerShell utilities for desktop tools
+ * Upgraded to use spawn() for better control and streaming
  */
 
-const { exec } = require('child_process');
-const util = require('util');
+const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
-const execPromise = util.promisify(exec);
-
 const IS_WINDOWS = process.platform === 'win32';
+
+/**
+ * Execute a command using spawn with timeout support
+ * @param {string} command - Command to execute
+ * @param {string[]} args - Command arguments
+ * @param {Object} options - Options (timeout, maxBuffer, shell, cwd)
+ * @returns {Promise<{stdout: string, stderr: string}>}
+ */
+function spawnCommand(command, args = [], options = {}) {
+  return new Promise((resolve, reject) => {
+    const { timeout = 30000, maxBuffer = 10 * 1024 * 1024, cwd } = options;
+
+    const child = spawn(command, args, {
+      cwd,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let killed = false;
+
+    const timeoutId = setTimeout(() => {
+      killed = true;
+      child.kill('SIGTERM');
+      setTimeout(() => {
+        if (!child.killed) {
+          child.kill('SIGKILL');
+        }
+      }, 1000);
+    }, timeout);
+
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+      if (stdout.length > maxBuffer) {
+        killed = true;
+        child.kill('SIGTERM');
+      }
+    });
+
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
+      if (stderr.length > maxBuffer) {
+        killed = true;
+        child.kill('SIGTERM');
+      }
+    });
+
+    child.on('close', (code) => {
+      clearTimeout(timeoutId);
+
+      if (killed) {
+        reject(Object.assign(new Error(`Command timed out or exceeded buffer`), {
+          killed: true,
+          stdout,
+          stderr
+        }));
+      } else if (code !== 0) {
+        reject(Object.assign(new Error(`Command failed with code ${code}`), {
+          code,
+          stdout,
+          stderr
+        }));
+      } else {
+        resolve({ stdout, stderr });
+      }
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timeoutId);
+      reject(Object.assign(err, { stdout, stderr }));
+    });
+  });
+}
 
 /**
  * Execute PowerShell command by writing to a temp .ps1 file (avoids escaping issues)
@@ -21,31 +93,29 @@ async function runPowerShell(script, options = {}) {
   }
 
   const timeout = options.timeout || 10000;
-  const scriptFile = path.join(os.tmpdir(), `ps_script_${Date.now()}.ps1`);
+  const scriptFile = path.join(os.tmpdir(), `ps_script_${Date.now()}_${Math.random().toString(36).slice(2)}.ps1`);
 
   try {
-    // Write script to temp file
     fs.writeFileSync(scriptFile, script, 'utf8');
 
-    // Execute the script file
-    const command = `powershell -NoProfile -ExecutionPolicy Bypass -File "${scriptFile}"`;
-    const { stdout, stderr } = await execPromise(command, { timeout });
+    const { stdout, stderr } = await spawnCommand(
+      'powershell',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptFile],
+      { timeout }
+    );
 
-    // Check for PowerShell errors in stderr
     if (stderr && stderr.trim()) {
       console.warn('[desktop-tools] PowerShell stderr:', stderr.trim());
     }
 
     return { stdout: stdout.trim(), stderr: stderr.trim() };
   } catch (error) {
-    // Capture PowerShell execution errors
     console.error('[desktop-tools] PowerShell error:', error.message);
     if (error.stderr) {
       console.error('[desktop-tools] PowerShell stderr:', error.stderr);
     }
     throw new Error(`PowerShell failed: ${error.message}${error.stderr ? ' - ' + error.stderr : ''}`);
   } finally {
-    // Clean up script file
     try {
       if (fs.existsSync(scriptFile)) {
         fs.unlinkSync(scriptFile);
@@ -67,7 +137,11 @@ async function runCmd(command, options = {}) {
   const timeout = options.timeout || 10000;
 
   try {
-    const { stdout, stderr } = await execPromise(command, { timeout, shell: 'cmd.exe' });
+    const { stdout, stderr } = await spawnCommand(
+      'cmd.exe',
+      ['/c', command],
+      { timeout }
+    );
     return { stdout: stdout.trim(), stderr: stderr.trim() };
   } catch (error) {
     console.error('[desktop-tools] CMD error:', error.message);
@@ -79,7 +153,6 @@ async function runCmd(command, options = {}) {
  * Get screen size using PowerShell with cmd fallback
  */
 async function getScreenSize() {
-  // Try PowerShell first
   try {
     const script = `
       Add-Type -AssemblyName System.Windows.Forms
@@ -89,7 +162,6 @@ async function getScreenSize() {
     const { stdout } = await runPowerShell(script);
     const [width, height] = stdout.split(',').map(Number);
 
-    // Validate the values
     if (width > 0 && height > 0 && !isNaN(width) && !isNaN(height)) {
       return { width, height };
     }
@@ -98,7 +170,6 @@ async function getScreenSize() {
     console.warn('[desktop-tools] PowerShell getScreenSize failed:', error.message);
   }
 
-  // Fallback: Use WMIC command via cmd
   try {
     const { stdout } = await runCmd('wmic path Win32_VideoController get CurrentHorizontalResolution,CurrentVerticalResolution /format:csv');
     const lines = stdout.split('\n').filter(line => line.trim() && !line.startsWith('Node'));
@@ -116,7 +187,6 @@ async function getScreenSize() {
     console.warn('[desktop-tools] WMIC getScreenSize failed:', error.message);
   }
 
-  // Final fallback: Return common resolution with error flag
   return { width: 1920, height: 1080, error: 'Could not detect screen size, using default 1920x1080' };
 }
 
@@ -133,7 +203,6 @@ async function getMousePosition() {
     const { stdout } = await runPowerShell(script);
     const [x, y] = stdout.split(',').map(Number);
 
-    // Validate the values
     if (!isNaN(x) && !isNaN(y)) {
       return { x, y };
     }
@@ -157,6 +226,7 @@ async function moveMouse(x, y) {
 
 module.exports = {
   IS_WINDOWS,
+  spawnCommand,
   runPowerShell,
   runCmd,
   getScreenSize,

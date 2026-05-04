@@ -1,19 +1,64 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import '../styles/setup.css';
 
 function SetupWizard({ onComplete }) {
   const [step, setStep] = useState(1);
+  const [providers, setProviders] = useState([]);
+  const [selectedProvider, setSelectedProvider] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [bedrockCredentials, setBedrockCredentials] = useState({
+    awsSecretAccessKey: '',
+    awsRegion: 'us-east-1'
+  });
+  const [showSecretKey, setShowSecretKey] = useState(false);
+  const [selectedModel, setSelectedModel] = useState('');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
-  const [models, setModels] = useState([]);
-  const [selectedModel, setSelectedModel] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
+  useEffect(() => {
+    loadProviders();
+  }, []);
+
+  const loadProviders = async () => {
+    try {
+      if (window.akira?.getProviders) {
+        const providerList = await window.akira.getProviders();
+        setProviders(providerList);
+        if (providerList.length > 0) {
+          setSelectedProvider(providerList[0].id);
+          setSelectedModel(providerList[0].defaultModel);
+        }
+      }
+    } catch (err) {
+      console.error('Error loading providers:', err);
+    }
+  };
+
+  const currentProvider = providers.find(p => p.id === selectedProvider) || {};
+
+  const handleProviderChange = (providerId) => {
+    setSelectedProvider(providerId);
+    const provider = providers.find(p => p.id === providerId);
+    if (provider) {
+      setSelectedModel(provider.defaultModel);
+    }
+    setApiKey('');
+    setBedrockCredentials({ awsSecretAccessKey: '', awsRegion: 'us-east-1' });
+    setTestResult(null);
+    setError('');
+  };
+
   const handleTestConnection = async () => {
-    if (!apiKey.trim()) {
+    if (selectedProvider === 'bedrock') {
+      if (!apiKey.trim() || !bedrockCredentials.awsSecretAccessKey.trim()) {
+        setError('Please enter both AWS Access Key ID and Secret Access Key');
+        return;
+      }
+    } else if (!apiKey.trim()) {
       setError('Please enter your API key');
       return;
     }
@@ -23,30 +68,42 @@ function SetupWizard({ onComplete }) {
     setTestResult(null);
 
     try {
-      const success = await window.akira.testConnection(apiKey.trim());
-      if (success) {
-        setTestResult('success');
-        // Fetch available free models
-        const modelList = await window.akira.getModels();
-        setModels(modelList);
-        if (modelList.length > 0) {
-          setSelectedModel(modelList[0].id);
+      // For now, we just validate that credentials are provided
+      // A more robust validation would require provider-specific test endpoints
+      if (selectedProvider === 'openrouter') {
+        const success = await window.akira.testConnection(apiKey.trim());
+        if (success) {
+          setTestResult('success');
+        } else {
+          setTestResult('failed');
+          setError('Connection test failed. Please check your API key.');
         }
       } else {
-        setTestResult('failed');
-        setError('Connection test failed. Please check your API key.');
+        // For other providers, we trust the credentials format
+        // Real validation happens on first API call
+        setTestResult('success');
       }
     } catch (err) {
       setTestResult('failed');
-      setError(`Error: ${err}`);
+      setError(`Error: ${err.message || err}`);
     } finally {
       setTesting(false);
     }
   };
 
   const handleNext = () => {
-    if (step === 1 && testResult === 'success') {
+    if (step === 1 && selectedProvider) {
       setStep(2);
+    } else if (step === 2 && testResult === 'success') {
+      setStep(3);
+    }
+  };
+
+  const handleBack = () => {
+    if (step > 1) {
+      setStep(step - 1);
+      setTestResult(null);
+      setError('');
     }
   };
 
@@ -55,21 +112,228 @@ function SetupWizard({ onComplete }) {
     setError('');
 
     try {
-      // Save API key
-      await window.akira.setApiKey(apiKey.trim());
+      // Save provider selection
+      await window.akira.setSelectedProvider(selectedProvider);
 
-      // Update settings with selected model
-      await window.akira.saveSettings({
-        defaultModel: selectedModel,
-      });
+      // Save API key for the provider
+      await window.akira.setProviderApiKey(selectedProvider, apiKey.trim());
+
+      // Save Bedrock credentials if applicable
+      if (selectedProvider === 'bedrock') {
+        await window.akira.setBedrockCredentials(bedrockCredentials);
+      }
+
+      // Save selected model
+      await window.akira.setSelectedModel(selectedModel);
 
       onComplete();
     } catch (err) {
-      setError(`Error saving settings: ${err}`);
+      setError(`Error saving settings: ${err.message || err}`);
     } finally {
       setSaving(false);
     }
   };
+
+  const renderProviderStep = () => (
+    <motion.div
+      className="setup__step"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+    >
+      <h2 className="setup__step-title">Step 1: Choose a Provider</h2>
+      <p className="setup__step-desc">
+        Select your AI provider. Each provider requires its own API credentials.
+      </p>
+
+      <div className="setup__input-group">
+        <label className="setup__label">Provider</label>
+        <select
+          className="setup__select"
+          value={selectedProvider}
+          onChange={(e) => handleProviderChange(e.target.value)}
+        >
+          {providers.map((provider) => (
+            <option key={provider.id} value={provider.id}>
+              {provider.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {currentProvider.docsUrl && (
+        <a
+          href={currentProvider.docsUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="setup__link"
+          style={{ display: 'block', marginBottom: '16px', fontSize: '13px' }}
+        >
+          Get {currentProvider.name} credentials
+        </a>
+      )}
+
+      <div className="setup__actions">
+        <button
+          className="setup__btn setup__btn--primary"
+          onClick={handleNext}
+          disabled={!selectedProvider}
+        >
+          Next
+        </button>
+      </div>
+    </motion.div>
+  );
+
+  const renderCredentialsStep = () => (
+    <motion.div
+      className="setup__step"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+    >
+      <h2 className="setup__step-title">Step 2: Enter Credentials</h2>
+      <p className="setup__step-desc">
+        Enter your {currentProvider.name} credentials to connect.
+      </p>
+
+      {selectedProvider === 'bedrock' ? (
+        <>
+          <div className="setup__input-group">
+            <label className="setup__label">AWS Access Key ID</label>
+            <input
+              type={showApiKey ? 'text' : 'password'}
+              className="setup__input"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder="AKIA..."
+              disabled={testing}
+            />
+          </div>
+
+          <div className="setup__input-group">
+            <label className="setup__label">AWS Secret Access Key</label>
+            <input
+              type={showSecretKey ? 'text' : 'password'}
+              className="setup__input"
+              value={bedrockCredentials.awsSecretAccessKey}
+              onChange={(e) => setBedrockCredentials(prev => ({
+                ...prev,
+                awsSecretAccessKey: e.target.value
+              }))}
+              placeholder="Enter secret key..."
+              disabled={testing}
+            />
+          </div>
+
+          <div className="setup__input-group">
+            <label className="setup__label">AWS Region</label>
+            <input
+              type="text"
+              className="setup__input"
+              value={bedrockCredentials.awsRegion}
+              onChange={(e) => setBedrockCredentials(prev => ({
+                ...prev,
+                awsRegion: e.target.value
+              }))}
+              placeholder="us-east-1"
+              disabled={testing}
+            />
+          </div>
+        </>
+      ) : (
+        <div className="setup__input-group">
+          <label className="setup__label">API Key</label>
+          <input
+            type={showApiKey ? 'text' : 'password'}
+            className="setup__input"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={currentProvider.apiKeyPlaceholder || 'Enter API key...'}
+            disabled={testing}
+          />
+        </div>
+      )}
+
+      {error && <div className="setup__error">{error}</div>}
+
+      {testResult === 'success' && (
+        <div className="setup__success">
+          Credentials look good!
+        </div>
+      )}
+
+      <div className="setup__actions">
+        <button
+          className="setup__btn setup__btn--secondary"
+          onClick={handleBack}
+        >
+          Back
+        </button>
+        <button
+          className="setup__btn setup__btn--secondary"
+          onClick={handleTestConnection}
+          disabled={testing || (!apiKey.trim() && selectedProvider !== 'bedrock') || (selectedProvider === 'bedrock' && (!apiKey.trim() || !bedrockCredentials.awsSecretAccessKey.trim()))}
+        >
+          {testing ? 'Testing...' : 'Test Connection'}
+        </button>
+        <button
+          className="setup__btn setup__btn--primary"
+          onClick={handleNext}
+          disabled={testResult !== 'success'}
+        >
+          Next
+        </button>
+      </div>
+    </motion.div>
+  );
+
+  const renderModelStep = () => (
+    <motion.div
+      className="setup__step"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+    >
+      <h2 className="setup__step-title">Step 3: Choose a Model</h2>
+      <p className="setup__step-desc">
+        Enter a model ID or use the default for {currentProvider.name}.
+      </p>
+
+      <div className="setup__input-group">
+        <label className="setup__label">Model</label>
+        <input
+          type="text"
+          className="setup__input"
+          value={selectedModel}
+          onChange={(e) => setSelectedModel(e.target.value)}
+          placeholder={currentProvider.defaultModel || 'Enter model ID...'}
+        />
+      </div>
+
+      <p className="setup__step-desc" style={{ marginTop: '8px', fontSize: '12px' }}>
+        Default: {currentProvider.defaultModel}
+      </p>
+
+      {error && <div className="setup__error">{error}</div>}
+
+      <div className="setup__actions">
+        <button
+          className="setup__btn setup__btn--secondary"
+          onClick={handleBack}
+        >
+          Back
+        </button>
+        <button
+          className="setup__btn setup__btn--primary"
+          onClick={handleComplete}
+          disabled={saving || !selectedModel}
+        >
+          {saving ? 'Saving...' : 'Get Started'}
+        </button>
+      </div>
+    </motion.div>
+  );
 
   return (
     <div className="setup">
@@ -85,127 +349,15 @@ function SetupWizard({ onComplete }) {
           <p className="setup__subtitle">Let's get you set up</p>
         </div>
 
-        {step === 1 && (
-          <motion.div
-            className="setup__step"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-          >
-            <h2 className="setup__step-title">Step 1: Connect to OpenRouter</h2>
-            <p className="setup__step-desc">
-              Akira uses OpenRouter to access AI models. Get your API key from{' '}
-              <a
-                href="https://openrouter.ai/keys"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="setup__link"
-              >
-                openrouter.ai/keys
-              </a>
-            </p>
-            <a
-              href="https://www.youtube.com/watch?v=_K69Axdo_vc"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="setup__tutorial-link"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
-              </svg>
-              Watch tutorial: How to get your API key
-            </a>
-
-            <div className="setup__input-group">
-              <label className="setup__label">API Key</label>
-              <input
-                type="password"
-                className="setup__input"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="sk-or-..."
-                disabled={testing}
-              />
-            </div>
-
-            {error && <div className="setup__error">{error}</div>}
-
-            {testResult === 'success' && (
-              <div className="setup__success">
-                Connection successful! {models.length} models available.
-              </div>
-            )}
-
-            <div className="setup__actions">
-              <button
-                className="setup__btn setup__btn--secondary"
-                onClick={handleTestConnection}
-                disabled={testing || !apiKey.trim()}
-              >
-                {testing ? 'Testing...' : 'Test Connection'}
-              </button>
-              <button
-                className="setup__btn setup__btn--primary"
-                onClick={handleNext}
-                disabled={testResult !== 'success'}
-              >
-                Next
-              </button>
-            </div>
-          </motion.div>
-        )}
-
-        {step === 2 && (
-          <motion.div
-            className="setup__step"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-          >
-            <h2 className="setup__step-title">Step 2: Choose a Model</h2>
-            <p className="setup__step-desc">
-              Select a default model to use.
-            </p>
-
-            <div className="setup__input-group">
-              <label className="setup__label">Default Model</label>
-              <select
-                className="setup__select"
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-              >
-                {models.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.name || model.id}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {error && <div className="setup__error">{error}</div>}
-
-            <div className="setup__actions">
-              <button
-                className="setup__btn setup__btn--secondary"
-                onClick={() => setStep(1)}
-              >
-                Back
-              </button>
-              <button
-                className="setup__btn setup__btn--primary"
-                onClick={handleComplete}
-                disabled={saving || !selectedModel}
-              >
-                {saving ? 'Saving...' : 'Get Started'}
-              </button>
-            </div>
-          </motion.div>
-        )}
+        {step === 1 && renderProviderStep()}
+        {step === 2 && renderCredentialsStep()}
+        {step === 3 && renderModelStep()}
 
         <div className="setup__footer">
           <div className="setup__steps">
             <div className={`setup__step-dot ${step >= 1 ? 'setup__step-dot--active' : ''}`} />
             <div className={`setup__step-dot ${step >= 2 ? 'setup__step-dot--active' : ''}`} />
+            <div className={`setup__step-dot ${step >= 3 ? 'setup__step-dot--active' : ''}`} />
           </div>
         </div>
       </motion.div>

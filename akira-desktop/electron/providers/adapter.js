@@ -158,9 +158,11 @@ async function processBedrockStream(response, onEvent) {
   let content = '';
   let thinking = '';
   const toolCalls = [];
+  const thinkingBlocks = [];
   let currentToolUse = null;
   let currentToolInput = '';
   let currentBlockType = null;
+  let currentThinkingBlock = null;
 
   for await (const event of response.body) {
     if (event.chunk) {
@@ -181,6 +183,14 @@ async function processBedrockStream(response, onEvent) {
             currentBlockType = 'tool_use';
           } else if (chunk.content_block?.type === 'thinking') {
             currentBlockType = 'thinking';
+            currentThinkingBlock = { type: 'thinking', thinking: '' };
+          } else if (chunk.content_block?.type === 'redacted_thinking') {
+            // Capture redacted_thinking blocks exactly as received
+            thinkingBlocks.push({
+              type: 'redacted_thinking',
+              data: chunk.content_block.data
+            });
+            currentBlockType = 'redacted_thinking';
           } else if (chunk.content_block?.type === 'text') {
             currentBlockType = 'text';
           }
@@ -195,10 +205,18 @@ async function processBedrockStream(response, onEvent) {
             });
           } else if (chunk.delta?.type === 'thinking_delta') {
             thinking += chunk.delta.thinking;
+            if (currentThinkingBlock) {
+              currentThinkingBlock.thinking += chunk.delta.thinking;
+            }
             onEvent?.({
               type: 'reasoning',
               reasoning: chunk.delta.thinking
             });
+          } else if (chunk.delta?.type === 'signature_delta') {
+            // Capture signature for thinking blocks (required by API for multi-turn)
+            if (currentThinkingBlock) {
+              currentThinkingBlock.signature = chunk.delta.signature;
+            }
           } else if (chunk.delta?.type === 'input_json_delta') {
             currentToolInput += chunk.delta.partial_json;
           }
@@ -210,6 +228,10 @@ async function processBedrockStream(response, onEvent) {
             toolCalls.push(currentToolUse);
             currentToolUse = null;
             currentToolInput = '';
+          }
+          if (currentThinkingBlock) {
+            thinkingBlocks.push(currentThinkingBlock);
+            currentThinkingBlock = null;
           }
           currentBlockType = null;
           break;
@@ -223,7 +245,7 @@ async function processBedrockStream(response, onEvent) {
     }
   }
 
-  return { content, toolCalls, thinking };
+  return { content, toolCalls, thinking, thinkingBlocks };
 }
 
 /**
@@ -363,8 +385,10 @@ async function processAnthropicStream(response, onEvent) {
   let content = '';
   let thinking = '';
   const toolCalls = [];
+  const thinkingBlocks = []; // Preserve thinking blocks for conversation history
   let currentToolUse = null;
   let currentToolInput = '';
+  let currentThinkingBlock = null;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -400,6 +424,14 @@ async function processAnthropicStream(response, onEvent) {
                   }
                 };
                 currentToolInput = '';
+              } else if (event.content_block?.type === 'thinking') {
+                currentThinkingBlock = { type: 'thinking', thinking: '' };
+              } else if (event.content_block?.type === 'redacted_thinking') {
+                // Capture redacted_thinking blocks exactly as received
+                thinkingBlocks.push({
+                  type: 'redacted_thinking',
+                  data: event.content_block.data
+                });
               }
               break;
 
@@ -412,10 +444,18 @@ async function processAnthropicStream(response, onEvent) {
                 });
               } else if (event.delta?.type === 'thinking_delta') {
                 thinking += event.delta.thinking;
+                if (currentThinkingBlock) {
+                  currentThinkingBlock.thinking += event.delta.thinking;
+                }
                 onEvent?.({
                   type: 'reasoning',
                   reasoning: event.delta.thinking
                 });
+              } else if (event.delta?.type === 'signature_delta') {
+                // Capture signature for thinking blocks (required by API for multi-turn)
+                if (currentThinkingBlock) {
+                  currentThinkingBlock.signature = event.delta.signature;
+                }
               } else if (event.delta?.type === 'input_json_delta') {
                 currentToolInput += event.delta.partial_json;
               }
@@ -427,6 +467,10 @@ async function processAnthropicStream(response, onEvent) {
                 toolCalls.push(currentToolUse);
                 currentToolUse = null;
                 currentToolInput = '';
+              }
+              if (currentThinkingBlock) {
+                thinkingBlocks.push(currentThinkingBlock);
+                currentThinkingBlock = null;
               }
               break;
 
@@ -450,7 +494,8 @@ async function processAnthropicStream(response, onEvent) {
   return {
     content,
     toolCalls,
-    thinking
+    thinking,
+    thinkingBlocks
   };
 }
 

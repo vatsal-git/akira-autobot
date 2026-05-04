@@ -73,6 +73,10 @@ contextBridge.exposeInMainWorld('akira', {
   submitEmergencyResponse: (response) => ipcRenderer.invoke('submit-emergency-response', response),
   submitClarificationResponse: (clarificationId, response) => ipcRenderer.invoke('submit-clarification-response', { clarificationId, response }),
 
+  // Todo list
+  getTodoList: () => ipcRenderer.invoke('get-todo-list'),
+  clearTodoList: () => ipcRenderer.invoke('clear-todo-list'),
+
   // Event listeners
   onChatStream: (callback) => {
     const handler = (event, data) => callback(data);

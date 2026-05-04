@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Widget from './components/Widget';
-import SetupWizard from './components/SetupWizard';
+import ErrorBoundary from './components/ErrorBoundary';
 import './styles/app.css';
 
 function App() {
@@ -8,7 +8,6 @@ function App() {
   const [settings, setSettings] = useState(null);
 
   useEffect(() => {
-    // Check if API key is configured
     checkConfiguration();
     loadSettings();
 
@@ -27,15 +26,29 @@ function App() {
 
   const checkConfiguration = async () => {
     try {
-      if (window.akira?.hasApiKey) {
+      if (window.akira?.getSelectedProvider && window.akira?.getProviderApiKey) {
+        // Check if the selected provider has an API key configured
+        const selectedProvider = await window.akira.getSelectedProvider();
+        const apiKey = await window.akira.getProviderApiKey(selectedProvider);
+
+        // For Bedrock, also check if credentials are set
+        if (selectedProvider === 'bedrock') {
+          const credentials = await window.akira.getBedrockCredentials();
+          const hasCredentials = apiKey && credentials?.awsSecretAccessKey;
+          setIsConfigured(!!hasCredentials);
+        } else {
+          setIsConfigured(!!apiKey);
+        }
+      } else if (window.akira?.hasApiKey) {
+        // Fallback to legacy check
         const hasKey = await window.akira.hasApiKey();
         setIsConfigured(hasKey);
       } else {
-        // Fallback for browser testing
+        // Browser testing mode - show setup
         setIsConfigured(false);
       }
     } catch (error) {
-      console.error('Error checking API key:', error);
+      console.error('Error checking configuration:', error);
       setIsConfigured(false);
     }
   };
@@ -56,8 +69,26 @@ function App() {
     loadSettings();
   };
 
-  // Always show widget for now (skip setup check)
-  return <Widget settings={settings} onSettingsChange={loadSettings} />;
+  // Show loading state while checking configuration
+  if (isConfigured === null) {
+    return (
+      <div className="app-loading">
+        <div className="app-loading__spinner" />
+      </div>
+    );
+  }
+
+  // Show Widget for both setup mode and normal mode
+  return (
+    <ErrorBoundary>
+      <Widget
+        settings={settings}
+        onSettingsChange={loadSettings}
+        isSetupMode={!isConfigured}
+        onSetupComplete={handleSetupComplete}
+      />
+    </ErrorBoundary>
+  );
 }
 
 export default App;

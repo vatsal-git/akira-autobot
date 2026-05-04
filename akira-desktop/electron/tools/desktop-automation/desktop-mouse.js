@@ -4,6 +4,7 @@
  */
 
 const { runPowerShell, getMousePosition, moveMouse } = require('../utils/powershell');
+const { emitAction } = require('../../overlay/overlay-events');
 
 /**
  * Mouse click using PowerShell and user32.dll
@@ -125,6 +126,7 @@ const handlers = {
         if (input.x == null || input.y == null) {
           return { success: false, error: 'move_mouse requires x and y' };
         }
+        emitAction({ type: 'move', x: input.x, y: input.y });
         return await moveMouseAnimated(input.x, input.y, duration);
 
       case 'click':
@@ -132,6 +134,7 @@ const handlers = {
         if (btn !== 'left' && btn !== 'right' && btn !== 'middle') {
           return { success: false, error: 'button must be left, right, or middle' };
         }
+        emitAction({ type: 'click', x: input.x, y: input.y, button: btn });
         if (input.x != null && input.y != null && duration) {
           await moveMouseAnimated(input.x, input.y, duration);
           return await mouseClick(btn);
@@ -139,6 +142,7 @@ const handlers = {
         return await mouseClick(btn, input.x, input.y);
 
       case 'double_click':
+        emitAction({ type: 'double_click', x: input.x, y: input.y });
         if (input.x != null && input.y != null && duration) {
           await moveMouseAnimated(input.x, input.y, duration);
         } else if (input.x != null && input.y != null) {
@@ -151,6 +155,7 @@ const handlers = {
         return { double_clicked: true, x: input.x, y: input.y };
 
       case 'right_click':
+        emitAction({ type: 'right_click', x: input.x, y: input.y });
         if (input.x != null && input.y != null && duration) {
           await moveMouseAnimated(input.x, input.y, duration);
           return { right_clicked: true, ...(await mouseClick('right')) };
@@ -158,6 +163,7 @@ const handlers = {
         return await mouseClick('right', input.x, input.y);
 
       case 'middle_click':
+        emitAction({ type: 'middle_click', x: input.x, y: input.y });
         if (input.x != null && input.y != null && duration) {
           await moveMouseAnimated(input.x, input.y, duration);
           return await middleClick();
@@ -172,12 +178,14 @@ const handlers = {
         if (amount == null) {
           return { success: false, error: 'scroll requires scroll_amount (integer wheel steps: positive up, negative down)' };
         }
+        emitAction({ type: 'scroll', amount });
         return await scroll(amount);
 
       case 'drag':
         if ([input.start_x, input.start_y, input.end_x, input.end_y].some(v => v == null)) {
           return { success: false, error: 'drag requires start_x, start_y, end_x, end_y' };
         }
+        emitAction({ type: 'drag', start_x: input.start_x, start_y: input.start_y, end_x: input.end_x, end_y: input.end_y });
         await moveMouse(input.start_x, input.start_y);
         await new Promise(r => setTimeout(r, 50));
         // Mouse down

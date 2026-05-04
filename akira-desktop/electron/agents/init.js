@@ -27,6 +27,7 @@ const { createWebAgent } = require('./specialists/web-agent');
 const { createMemoryAgent } = require('./specialists/memory-agent');
 const { createDesktopAgent } = require('./specialists/desktop-agent');
 const { createOrchestratorAgent } = require('./orchestrator');
+const { createTodoTools } = require('./todo-tools');
 
 let initialized = false;
 let currentApiConfig = null;
@@ -84,11 +85,14 @@ function createExecutionContext({ apiConfig, onEvent, signal }) {
   // Create delegate tool for orchestrator
   const delegateTool = createDelegateAgentTool(apiConfig, onEvent, signal);
 
-  // Get orchestrator and update its tools
+  // Create todo tools for orchestrator
+  const todoTools = createTodoTools(onEvent);
+
+  // Get orchestrator and update its tools (merge delegate + todo tools)
   const orchestrator = getAgent('akira');
   if (orchestrator) {
-    orchestrator.toolDefinitions = delegateTool.definitions;
-    orchestrator.toolHandlers = delegateTool.handlers;
+    orchestrator.toolDefinitions = [...delegateTool.definitions, ...todoTools.definitions];
+    orchestrator.toolHandlers = { ...delegateTool.handlers, ...todoTools.handlers };
     console.log('[agents] Orchestrator tools:', orchestrator.toolDefinitions.map(t => t.name));
   }
 
@@ -188,6 +192,55 @@ async function runOrchestrator({ message, conversationHistory = [], apiConfig, o
 }
 
 /**
+ * Run a user request directly to a specific agent (bypassing orchestrator)
+ * Used when user tags an agent with @agentname syntax
+ *
+ * @param {Object} options - Execution options
+ * @param {string} options.agentName - Name of agent to run directly
+ * @param {string} options.message - User message (without the @tag)
+ * @param {Array} options.conversationHistory - Previous messages for context
+ * @param {Object} options.apiConfig - API configuration
+ * @param {Function} options.onEvent - Event callback
+ * @param {AbortSignal} options.signal - Cancellation signal
+ * @returns {Promise<Object>} Execution result
+ */
+async function runDirectAgent({ agentName, message, conversationHistory = [], apiConfig, onEvent, signal }) {
+  if (!initialized) {
+    initializeAgents(apiConfig);
+  }
+
+  // Validate agent exists
+  const agent = getAgent(agentName);
+  if (!agent) {
+    return {
+      success: false,
+      error: `Agent '${agentName}' not found`
+    };
+  }
+
+  // Reset execution state for new request
+  resetExecutionState();
+
+  console.log(`[agents] Running direct agent: ${agentName}`);
+
+  // Execute agent directly without communication tools
+  // The agent will only have its own tools (no delegate, assign_task, etc.)
+  const result = await executeAgent({
+    agentName,
+    task: message,
+    conversationHistory,
+    context: '',
+    apiConfig,
+    onEvent,
+    signal,
+    parentAgent: null,
+    taskType: 'direct'
+  });
+
+  return result;
+}
+
+/**
  * Set workspace root for file operations
  */
 function setWorkspaceRoot(root) {
@@ -231,9 +284,17 @@ const {
   submitClarificationResponse
 } = require('./control');
 
+// Re-export todo functions for main.js
+const {
+  getTodoList,
+  clearTodoList,
+  onTodoEvent
+} = require('./todo-manager');
+
 module.exports = {
   initializeAgents,
   runOrchestrator,
+  runDirectAgent,
   setWorkspaceRoot,
   isInitialized,
   getAvailableAgents,
@@ -247,5 +308,9 @@ module.exports = {
   submitEmergencyResponse,
   clearEmergencyState,
   getEmergencyState,
-  submitClarificationResponse
+  submitClarificationResponse,
+  // Todo functions
+  getTodoList,
+  clearTodoList,
+  onTodoEvent
 };

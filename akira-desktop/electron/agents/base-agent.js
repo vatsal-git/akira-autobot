@@ -413,7 +413,18 @@ class BaseAgent {
 
     // Store parsed task for visibility handling
     this.currentTaskDef = parseSuccess ? parsedTask : { task: extractTaskString(task), output: { visibility: 'user' } };
-    const taskString = extractTaskString(task);
+    let taskString = extractTaskString(task);
+
+    // Check if this is a direct call from user (via @agentname tag)
+    const isDirectCall = task?._meta?.taskType === 'direct' || (typeof task === 'object' && task._meta?.taskType === 'direct');
+    if (isDirectCall) {
+      // Prepend guidance for handling tasks outside capabilities
+      taskString = `[The user tagged you directly with @${this.name}. If this task is outside your capabilities or you cannot complete it, explain what you can help with and ask the user how they'd like to proceed.]\n\n${taskString}`;
+      // Update the task definition as well
+      if (this.currentTaskDef.task) {
+        this.currentTaskDef.task = taskString;
+      }
+    }
 
     this.isRunning = true;
     this.currentTask = taskString;
@@ -517,7 +528,8 @@ class BaseAgent {
         role: 'assistant',
         content: response.content || null,
         tool_calls: response.toolCalls,
-        thinking: response.thinking // Preserve as-is (including empty string) for proper thinking block handling
+        thinking: response.thinking, // Preserve for display/debugging
+        thinkingBlocks: response.thinkingBlocks // Preserve actual blocks for API conversation history
       };
       messages.push(assistantMessage);
 

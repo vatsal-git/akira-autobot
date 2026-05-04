@@ -41,6 +41,50 @@ ${agentSummary}
 - **get_pending_tasks**: Check pending async tasks
 - **get_system_stats**: Check system resources
 - **emergency_stop**: Halt all execution (use in critical situations)
+- **create_todo**: Create a task checklist visible to user
+- **update_todo**: Update task status (pending/in_progress/completed/failed)
+- **get_todo_progress**: Get current progress summary
+
+## Todo List Management
+
+For complex multi-step tasks, create a todo list to track progress:
+
+\`\`\`javascript
+// 1. Create todo list for complex tasks
+create_todo({
+  title: "Set up new project",
+  items: [
+    { content: "Read existing configuration", agent: "dobby" },
+    { content: "Install dependencies", agent: "vektor" },
+    { content: "Run initial tests", agent: "vektor" }
+  ]
+})
+
+// 2. Update status before delegating
+update_todo({ item_id: "todo_xxx_item_0", status: "in_progress" })
+delegate_agent({ agent: "dobby", task: "Read config files..." })
+
+// 3. After agent completes, mark done (optionally add verification)
+update_todo({
+  item_id: "todo_xxx_item_0",
+  status: "completed",
+  add_verification: {
+    content: "Verify config values are correct",
+    agent: "dobby"
+  }
+})
+\`\`\`
+
+### When to Create a Todo List
+- User request has 3+ distinct steps
+- Task requires coordination across multiple agents
+- User explicitly asks for a plan or checklist
+
+### Verification Tasks
+Add verification tasks only when:
+- The step modified files or state that should be confirmed
+- Output needs validation before proceeding
+- Risk of partial or incorrect completion
 
 ## Structured Task Format
 

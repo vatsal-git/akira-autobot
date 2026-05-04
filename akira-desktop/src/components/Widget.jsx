@@ -2,13 +2,17 @@ import React, { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffe
 import ChatInput from './ChatInput';
 import MessageList from './MessageList';
 import SettingsPanel from './SettingsPanel';
+import SetupPanel from './SetupPanel';
+import TodoPanel from './TodoPanel';
 import '../styles/widget.css';
 import '../styles/alerts.css';
+import '../styles/todo-panel.css';
+import '../styles/setup-panel.css';
 
 const CORNERS = ['bottom-right', 'bottom-left', 'top-right', 'top-left'];
 const SIDEBAR_POSITIONS = ['right', 'left'];
 
-function Widget({ settings, onSettingsChange }) {
+function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
   const [messages, setMessages] = useState([]);
   const [chatId, setChatId] = useState(null);
   const [sending, setSending] = useState(false);
@@ -25,6 +29,8 @@ function Widget({ settings, onSettingsChange }) {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [copiedChat, setCopiedChat] = useState(false);
+  const [todoList, setTodoList] = useState(null);
+  const [todoCollapsed, setTodoCollapsed] = useState(false);
   const messagesEndRef = useRef(null);
   const currentContentRef = useRef('');
   const lastRelocateTime = useRef(0);
@@ -535,6 +541,37 @@ function Widget({ settings, onSettingsChange }) {
         });
         break;
 
+      case 'todo_created':
+        setTodoList(data.data);
+        setTodoCollapsed(false); // Auto-expand when created
+        break;
+
+      case 'todo_updated':
+        setTodoList(prev => {
+          if (!prev) return prev;
+          const updatedItems = prev.items.map(item =>
+            item.id === data.data.itemId
+              ? { ...item, ...data.data.updates }
+              : item
+          );
+          // Add new verification item if present
+          if (data.data.newItem) {
+            // Find index of parent item and insert after it
+            const parentIdx = updatedItems.findIndex(i => i.id === data.data.itemId);
+            if (parentIdx !== -1) {
+              updatedItems.splice(parentIdx + 1, 0, data.data.newItem);
+            } else {
+              updatedItems.push(data.data.newItem);
+            }
+          }
+          return { ...prev, items: updatedItems, updatedAt: Date.now() };
+        });
+        break;
+
+      case 'todo_cleared':
+        setTodoList(null);
+        break;
+
       default:
         break;
     }
@@ -723,6 +760,7 @@ function Widget({ settings, onSettingsChange }) {
     setMessages([]);
     setChatId(null);
     setShowHistory(false);
+    setTodoList(null); // Clear todo list for new chat
     // Auto-focus input for new chat
     setTimeout(() => {
       const textarea = document.querySelector('.chat-input__textarea');
@@ -965,7 +1003,7 @@ function Widget({ settings, onSettingsChange }) {
       {/* Header */}
       <div className="widget__header">
         <div className="widget__header-left">
-          {(showSettings || showHistory) ? (
+          {(showSettings || showHistory) && !isSetupMode ? (
             <button
               className="widget__btn widget__btn--back"
               onClick={() => {
@@ -986,11 +1024,12 @@ function Widget({ settings, onSettingsChange }) {
           ) : null}
           <span
             className="widget__title"
-            style={!showSettings && !showHistory ? tubeInlineStyle : undefined}
-          >{showSettings ? (settingsView === 'model' ? 'Model Settings' : 'Settings') : showHistory ? 'History' : 'A'}</span>
+            style={!showSettings && !showHistory && !isSetupMode ? tubeInlineStyle : undefined}
+          >{isSetupMode ? 'Setup' : showSettings ? (settingsView === 'model' ? 'Model Settings' : 'Settings') : showHistory ? 'History' : 'A'}</span>
         </div>
         <div className="widget__header-right">
-          {!showSettings && !showHistory && (
+          {/* Hide all action icons during setup mode */}
+          {!isSetupMode && !showSettings && !showHistory && (
             <>
               {/* New Chat button */}
               <button
@@ -999,7 +1038,7 @@ function Widget({ settings, onSettingsChange }) {
                 title="New chat"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 5v14M5 12h14" />
+                  <path d="M17 3a2.828 2.828 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
                 </svg>
               </button>
               {/* Copy Chat button */}
@@ -1054,8 +1093,8 @@ function Widget({ settings, onSettingsChange }) {
               </button>
             </>
           )}
-          {/* Maximize/Restore button only in window mode */}
-          {settings?.widgetMode === 'window' && (
+          {/* Maximize/Restore button only in window mode, hide during setup */}
+          {!isSetupMode && settings?.widgetMode === 'window' && (
             <button
               className="widget__btn widget__btn--maximize"
               onClick={async () => {
@@ -1076,26 +1115,31 @@ function Widget({ settings, onSettingsChange }) {
               </svg>
             </button>
           )}
-          <button
-            className="widget__btn widget__btn--collapse"
-            onClick={() => {
-              if (settings?.widgetMode === 'window') {
-                window.akira?.minimizeWindow?.();
-              } else {
-                window.akira?.setCollapsed?.(true);
-              }
-            }}
-            title={settings?.widgetMode === 'window' ? "Minimize" : "Collapse"}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M5 12h14" />
-            </svg>
-          </button>
+          {/* Collapse/Minimize button - hide during setup */}
+          {!isSetupMode && (
+            <button
+              className="widget__btn widget__btn--collapse"
+              onClick={() => {
+                if (settings?.widgetMode === 'window') {
+                  window.akira?.minimizeWindow?.();
+                } else {
+                  window.akira?.setCollapsed?.(true);
+                }
+              }}
+              title={settings?.widgetMode === 'window' ? "Minimize" : "Collapse"}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M5 12h14" />
+              </svg>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Content: Settings, History, or Chat */}
-      {showSettings ? (
+      {/* Content: Setup, Settings, History, or Chat */}
+      {isSetupMode ? (
+        <SetupPanel onComplete={onSetupComplete} />
+      ) : showSettings ? (
         <SettingsPanel
           settings={settings}
           onClose={() => { setShowSettings(false); setSettingsView('general'); }}
@@ -1141,6 +1185,13 @@ function Widget({ settings, onSettingsChange }) {
         </div>
       ) : (
         <>
+          {/* Todo List Panel */}
+          <TodoPanel
+            todoList={todoList}
+            isCollapsed={todoCollapsed}
+            onToggle={() => setTodoCollapsed(!todoCollapsed)}
+          />
+
           {/* Messages */}
           <div className="widget__messages">
             {messages.length === 0 ? (

@@ -1,6 +1,6 @@
 {
   "name": "akira-desktop",
-  "version": "1.0.14",
+  "version": "1.0.20",
   "description": "Akira AI Assistant - Always-on-top desktop widget",
   "main": "electron/main.js",
   "type": "commonjs",

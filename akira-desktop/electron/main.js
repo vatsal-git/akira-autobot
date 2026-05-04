@@ -45,11 +45,18 @@ function getBlurOptions() {
 const { executeTool, getToolsForAPI, getToolsWithCategories } = require('./tools');
 const { getSystemPrompt } = require('./system-prompt');
 
+// Import overlay system
+const overlayManager = require('./overlay/overlay-manager');
+const { onOverlayEvent } = require('./overlay/overlay-events');
+
 // Import execute-command for streaming setup
 const { setOutputEmitter } = require('./tools/system/execute-command');
 
 // Import multi-agent system
-const { runOrchestrator, initializeAgents, getAvailableAgents, setWorkspaceRoot, clearCache, getCacheStats, submitEmergencyResponse, submitClarificationResponse } = require('./agents/init');
+const { runOrchestrator, runDirectAgent, initializeAgents, getAvailableAgents, setWorkspaceRoot, clearCache, getCacheStats, submitEmergencyResponse, submitClarificationResponse, getTodoList, clearTodoList, onTodoEvent } = require('./agents/init');
+
+// Import message parser for agent tagging
+const { parseAgentTag, isTaggableAgent, getTaggableAgentNames } = require('./agents/message-parser');
 
 // Import provider system
 const { getProviderList, getProvider } = require('./providers');
@@ -262,8 +269,9 @@ function createWindow() {
     if (wasVisible) {
       mainWindow.show();
       // Ensure window is focused and on top immediately on startup
+      // Use 'pop-up-menu' level so overlay can appear above it
       if (config.alwaysOnTop) {
-        mainWindow.setAlwaysOnTop(true, 'screen-saver');
+        mainWindow.setAlwaysOnTop(true, 'pop-up-menu');
         mainWindow.focus();
       }
     }
@@ -398,10 +406,38 @@ app.whenReady().then(async () => {
   createTray();
   registerGlobalShortcut();
 
+  // Create overlay window for visual feedback
+  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+  overlayManager.createOverlayWindow(isDev);
+
+  // Forward overlay events to overlay window
+  onOverlayEvent('action', (action) => {
+    overlayManager.showAction(action);
+  });
+
+  onOverlayEvent('screenshot', (data) => {
+    overlayManager.showScreenshot(data.region, data.label, data.animate);
+  });
+
+  onOverlayEvent('tool', (info) => {
+    overlayManager.showToolIndicator(info);
+  });
+
+  onOverlayEvent('agent', (active) => {
+    overlayManager.showAgentActive(active);
+  });
+
   // Set up command output streaming emitter
   setOutputEmitter((data) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('command-output', data);
+    }
+  });
+
+  // Forward todo events to renderer
+  onTodoEvent((event) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('chat-stream', { event: event.type, data: event.data });
     }
   });
 
@@ -418,6 +454,7 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  overlayManager.destroy();
   if (tray) {
     tray.destroy();
     tray = null;
@@ -671,7 +708,8 @@ ipcMain.handle('set-widget-mode', async (event, mode) => {
   const config = getWindowConfig(mode);
 
   // Update window properties without recreation
-  mainWindow.setAlwaysOnTop(config.alwaysOnTop, config.alwaysOnTop ? 'screen-saver' : undefined);
+  // Use 'pop-up-menu' level so overlay can appear above it
+  mainWindow.setAlwaysOnTop(config.alwaysOnTop, config.alwaysOnTop ? 'pop-up-menu' : undefined);
 
   // On Windows, setSkipTaskbar doesn't always take effect while visible
   // Hide briefly, apply the setting, then show again
@@ -1167,6 +1205,11 @@ ipcMain.on('send-message', async (event, { message, chatId, skipCache = false })
         });
         conversationHistory.set(finalChatId, messages);
 
+        // Show overlay when BeneGes (desktop agent) starts
+        if (agentEvent.agent === 'beneges') {
+          overlayManager.showAgentActive(true);
+        }
+
         // Send agent activity event
         event.reply('chat-stream', {
           event: 'agent_start',
@@ -1190,6 +1233,11 @@ ipcMain.on('send-message', async (event, { message, chatId, skipCache = false })
         });
         conversationHistory.set(finalChatId, messages);
 
+        // Show overlay when delegating to BeneGes (desktop agent)
+        if (agentEvent.toAgent === 'beneges') {
+          overlayManager.showAgentActive(true);
+        }
+
         // Send delegation event
         event.reply('chat-stream', {
           event: 'agent_delegate',
@@ -1211,6 +1259,11 @@ ipcMain.on('send-message', async (event, { message, chatId, skipCache = false })
           }
         }
         conversationHistory.set(finalChatId, messages);
+
+        // Hide overlay when BeneGes (desktop agent) completes
+        if (agentEvent.agent === 'beneges') {
+          overlayManager.showAgentActive(false);
+        }
 
         // Send completion event
         event.reply('chat-stream', {
@@ -1315,6 +1368,16 @@ ipcMain.on('send-message', async (event, { message, chatId, skipCache = false })
           },
           chatId: finalChatId
         });
+
+        // Show overlay for desktop automation tools
+        if (agentEvent.name && agentEvent.name.startsWith('desktop_')) {
+          overlayManager.showAgentActive(true);
+          overlayManager.showToolIndicator({
+            name: agentEvent.name,
+            status: 'start'
+          });
+        }
+
         console.log(`[${finalChatId}] [${agentEvent.agent}] Tool: ${agentEvent.name}`, agentEvent.input);
         break;
 
@@ -1340,11 +1403,40 @@ ipcMain.on('send-message', async (event, { message, chatId, skipCache = false })
           },
           chatId: finalChatId
         });
+
+        // Show tool completion indicator for desktop automation tools
+        if (agentEvent.name && agentEvent.name.startsWith('desktop_')) {
+          const success = agentEvent.result?.success !== false && !agentEvent.result?.error;
+          overlayManager.showToolIndicator({
+            name: agentEvent.name,
+            status: 'complete',
+            success
+          });
+        }
         break;
     }
   };
 
-  console.log(`[${finalChatId}] Starting multi-agent orchestration (model: ${selectedModel}, skipCache: ${skipCache})`);
+  // Parse message for agent tag (@agentname syntax)
+  const { tagged, agentName: taggedAgent, message: actualMessage } = parseAgentTag(message);
+
+  // Validate tagged agent if present
+  if (tagged) {
+    const availableAgents = getAvailableAgents();
+    if (!isTaggableAgent(taggedAgent, availableAgents)) {
+      const taggableNames = getTaggableAgentNames(availableAgents);
+      event.reply('chat-stream', {
+        event: 'error',
+        data: { error: `Unknown agent '@${taggedAgent}'. Available agents: ${taggableNames.join(', ')}` },
+        chatId: finalChatId
+      });
+      generationControllers.delete(finalChatId);
+      return;
+    }
+    console.log(`[${finalChatId}] Direct agent call to @${taggedAgent} (model: ${selectedModel})`);
+  } else {
+    console.log(`[${finalChatId}] Starting multi-agent orchestration (model: ${selectedModel}, skipCache: ${skipCache})`);
+  }
 
   // Track if response was from cache
   let wasCached = false;
@@ -1357,15 +1449,29 @@ ipcMain.on('send-message', async (event, { message, chatId, skipCache = false })
       .slice(0, -1)
       .map(m => ({ role: m.role, content: m.content }));
 
-    // Run the orchestrator
-    const result = await runOrchestrator({
-      message,
-      conversationHistory: llmHistory,
-      apiConfig,
-      onEvent,
-      signal: controller.signal,
-      skipCache
-    });
+    // Route to direct agent or orchestrator based on tag
+    let result;
+    if (tagged) {
+      // Direct agent call - bypass orchestrator
+      result = await runDirectAgent({
+        agentName: taggedAgent,
+        message: actualMessage,
+        conversationHistory: llmHistory,
+        apiConfig,
+        onEvent,
+        signal: controller.signal
+      });
+    } else {
+      // Normal orchestrator flow
+      result = await runOrchestrator({
+        message,
+        conversationHistory: llmHistory,
+        apiConfig,
+        onEvent,
+        signal: controller.signal,
+        skipCache
+      });
+    }
 
     // Check if response was cached
     wasCached = result.cached === true;
@@ -1424,6 +1530,9 @@ ipcMain.on('send-message', async (event, { message, chatId, skipCache = false })
 
       generationControllers.delete(finalChatId);
 
+      // Hide overlay when conversation is stopped
+      overlayManager.showAgentActive(false);
+
       event.reply('chat-stream', {
         event: 'cancelled',
         data: { chat_id: finalChatId, partial: accumulatedContent || '' },
@@ -1434,6 +1543,9 @@ ipcMain.on('send-message', async (event, { message, chatId, skipCache = false })
 
     console.error(`[${finalChatId}] Error:`, e);
     generationControllers.delete(finalChatId);
+
+    // Hide overlay on error
+    overlayManager.showAgentActive(false);
 
     event.reply('chat-stream', {
       event: 'error',
@@ -1465,6 +1577,18 @@ ipcMain.handle('clear-chat', (event, chatId) => {
       generationControllers.delete(chatId);
     }
   }
+  // Clear todo list for new chat
+  clearTodoList();
+  return true;
+});
+
+// Todo list handlers
+ipcMain.handle('get-todo-list', () => {
+  return getTodoList();
+});
+
+ipcMain.handle('clear-todo-list', () => {
+  clearTodoList();
   return true;
 });
 

@@ -1,0 +1,116 @@
+/* Error Boundary - Dark mode */
+.error-boundary {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+.error-boundary__card {
+  width: 100%;
+  max-width: 320px;
+  text-align: center;
+}
+
+.error-boundary__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+  color: var(--color-error);
+}
+
+.error-boundary__title {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--color-text);
+}
+
+.error-boundary__message {
+  color: var(--color-text-muted);
+  font-size: 14px;
+  margin-bottom: 24px;
+  line-height: 1.5;
+}
+
+.error-boundary__actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.error-boundary__btn {
+  padding: 10px 20px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: all var(--transition);
+  cursor: pointer;
+}
+
+.error-boundary__btn--primary {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.error-boundary__btn--primary:hover {
+  transform: translateY(-1px);
+  opacity: 0.9;
+}
+
+.error-boundary__btn--secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--color-text);
+}
+
+.error-boundary__btn--secondary:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.error-boundary__details {
+  margin-top: 16px;
+  text-align: left;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.error-boundary__details summary {
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
+.error-boundary__details summary:hover {
+  color: var(--color-text);
+}
+
+.error-boundary__details pre {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Light mode */
+.theme-light .error-boundary__btn--secondary {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.theme-light .error-boundary__btn--secondary:hover {
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.theme-light .error-boundary__details pre {
+  background: rgba(0, 0, 0, 0.05);
+}

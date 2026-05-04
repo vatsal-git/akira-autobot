@@ -187,15 +187,14 @@ function convertToAnthropicMessages(messages, thinkingEnabled = false) {
         content: msg.content
       });
     } else if (msg.role === 'assistant') {
-      // Handle assistant messages - must include thinking blocks first when thinking is enabled
+      // Handle assistant messages
       const content = [];
 
-      // Add thinking block first when thinking is enabled (required for extended thinking)
-      // Use redacted_thinking for historical messages since we don't store the signature
-      // required for full thinking blocks. The signature is a security measure to prevent
-      // injection of thinking content.
-      if (thinkingEnabled) {
-        content.push({ type: 'redacted_thinking', data: 'cmVkYWN0ZWQ=' });
+      // Only include thinking blocks if we have actual thinking data from the original response
+      // DO NOT inject fake redacted_thinking blocks - the API will reject invalid data
+      if (msg.thinkingBlocks && Array.isArray(msg.thinkingBlocks)) {
+        // Include original thinking/redacted_thinking blocks exactly as received
+        content.push(...msg.thinkingBlocks);
       }
 
       // Add text content if present
@@ -222,11 +221,12 @@ function convertToAnthropicMessages(messages, thinkingEnabled = false) {
         }
       }
 
-      // Use content array format when thinking is enabled or when we have tool_calls
-      if (thinkingEnabled || (msg.tool_calls && msg.tool_calls.length > 0)) {
+      // Use content array format when we have thinking blocks or tool_calls
+      const hasThinkingBlocks = msg.thinkingBlocks && msg.thinkingBlocks.length > 0;
+      if (hasThinkingBlocks || (msg.tool_calls && msg.tool_calls.length > 0)) {
         result.push({ role: 'assistant', content });
-      } else if (msg.thinking) {
-        // Has thinking but thinking not enabled globally - still use array format
+      } else if (content.length > 0) {
+        // Array format for any multi-block content
         result.push({ role: 'assistant', content });
       } else {
         result.push({

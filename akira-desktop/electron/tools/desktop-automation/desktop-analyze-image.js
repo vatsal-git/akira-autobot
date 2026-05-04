@@ -6,59 +6,24 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { runPowerShell, getScreenSize } = require('../utils/powershell');
+const { getScreenSize } = require('../utils/powershell');
+const { captureScreenRegion, captureFullScreen } = require('../utils/screenshot');
 const { analyzeImage, findElement, compareImages } = require('../utils/bedrock-vision');
 
 /**
- * Capture a screenshot region
+ * Capture a screenshot region using centralized utility
  */
-async function captureRegion(region) {
-  const { left, top, width, height } = region;
-  const tempFile = path.join(os.tmpdir(), `analyze_img_${Date.now()}.png`);
-
-  const script = `
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-
-try {
-    $bitmap = New-Object System.Drawing.Bitmap(${width}, ${height})
-    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-    $graphics.CopyFromScreen(${left}, ${top}, 0, 0, (New-Object System.Drawing.Size(${width}, ${height})))
-    $bitmap.Save("${tempFile}")
-    $graphics.Dispose()
-    $bitmap.Dispose()
-    Write-Output "OK"
-} catch {
-    Write-Host "EXCEPTION: $($_.Exception.Message)"
-    exit 1
-}
-`;
-
-  await runPowerShell(script, { timeout: 15000 });
-
-  if (!fs.existsSync(tempFile)) {
-    throw new Error('Failed to capture screenshot region');
-  }
-
-  const imageBuffer = fs.readFileSync(tempFile);
-  const base64 = imageBuffer.toString('base64');
-
-  try { fs.unlinkSync(tempFile); } catch {}
-
-  return base64;
+async function captureRegion(region, label = 'Analyzing region...') {
+  const result = await captureScreenRegion(region, { label, showOverlay: true });
+  return result.base64;
 }
 
 /**
- * Capture full screen
+ * Capture full screen using centralized utility
  */
-async function captureFullScreen() {
-  const screenSize = await getScreenSize();
-  return await captureRegion({
-    left: 0,
-    top: 0,
-    width: screenSize.width,
-    height: screenSize.height
-  });
+async function captureScreen(label = 'Analyzing screen...') {
+  const result = await captureFullScreen({ label, showOverlay: true });
+  return result.base64;
 }
 
 /**
@@ -83,7 +48,7 @@ async function desktopAnalyzeImage(input) {
     }
     imageBase64 = await captureRegion(region);
   } else if (action === 'analyze_full_screen') {
-    imageBase64 = await captureFullScreen();
+    imageBase64 = await captureScreen();
   } else if (action === 'analyze_base64') {
     if (!image_base64) {
       return { success: false, error: 'image_base64 is required for analyze_base64 action' };
@@ -139,7 +104,7 @@ async function desktopAnalyzeImage(input) {
     // Default: analyze whatever image is provided
     if (!image_base64 && !region) {
       // Capture full screen if nothing specified
-      imageBase64 = await captureFullScreen();
+      imageBase64 = await captureScreen();
     } else if (region) {
       imageBase64 = await captureRegion(region);
     }

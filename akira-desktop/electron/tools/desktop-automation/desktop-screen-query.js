@@ -7,6 +7,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { runPowerShell, getScreenSize, getMousePosition } = require('../utils/powershell');
+const { emitScreenshot } = require('../../overlay/overlay-events');
 
 /**
  * Take screenshot using PowerShell with multiple fallback methods
@@ -241,6 +242,7 @@ const handlers = {
         return await getScreenSize();
 
       case 'screenshot':
+        emitScreenshot(input.region || null, 'Screenshot');
         return await takeScreenshot(input.region);
 
       default:

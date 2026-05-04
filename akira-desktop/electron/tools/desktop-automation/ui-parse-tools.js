@@ -9,6 +9,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const Tesseract = require('tesseract.js');
+const { emitScreenshot } = require('../../overlay/overlay-events');
 
 // Tesseract.js worker instance (reused for performance)
 let tesseractWorker = null;
@@ -178,6 +179,9 @@ async function runPowerShell(script, options = {}) {
  */
 async function captureScreenshot(region = null) {
   const tempFile = path.join(os.tmpdir(), `akira_ocr_${Date.now()}.png`);
+
+  // Emit overlay event for visual feedback
+  emitScreenshot(region, 'Parsing UI...');
 
   // Method 1: Standard PowerShell with System.Drawing
   try {

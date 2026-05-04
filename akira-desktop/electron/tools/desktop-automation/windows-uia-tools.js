@@ -4,7 +4,7 @@
  * Upgraded to use spawn() for better control
  */
 
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -26,84 +26,43 @@ function truncate(s, n = MAX_NAME_LEN) {
 }
 
 /**
- * Execute PowerShell command using spawn() by writing to a temp .ps1 file
+ * Execute PowerShell command using exec() with base64-encoded script
+ * This approach better inherits the interactive desktop session for UIA access
  */
 async function runPowerShell(script, timeout = 30000) {
   if (!IS_WINDOWS) {
     throw new Error('windows_uia is only available on Windows');
   }
 
-  const scriptFile = path.join(os.tmpdir(), `uia_script_${Date.now()}_${Math.random().toString(36).slice(2)}.ps1`);
-
   return new Promise((resolve, reject) => {
-    try {
-      fs.writeFileSync(scriptFile, script, 'utf8');
-    } catch (err) {
-      return reject(new Error(`Failed to write script file: ${err.message}`));
-    }
+    // Encode script as base64 for -EncodedCommand (avoids quoting issues and file-based execution)
+    const encodedScript = Buffer.from(script, 'utf16le').toString('base64');
 
-    const child = spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptFile], {
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe']
-    });
+    const command = `powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodedScript}`;
 
-    let stdout = '';
-    let stderr = '';
-    let killed = false;
-    const maxBuffer = 10 * 1024 * 1024;
-
-    const timeoutId = setTimeout(() => {
-      killed = true;
-      child.kill('SIGTERM');
-      setTimeout(() => {
-        if (!child.killed) child.kill('SIGKILL');
-      }, 1000);
-    }, timeout);
-
-    child.stdout.on('data', (data) => {
-      stdout += data.toString();
-      if (stdout.length > maxBuffer) {
-        killed = true;
-        child.kill('SIGTERM');
-      }
-    });
-
-    child.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    const cleanup = () => {
-      try {
-        if (fs.existsSync(scriptFile)) fs.unlinkSync(scriptFile);
-      } catch {}
-    };
-
-    child.on('close', (code) => {
-      clearTimeout(timeoutId);
-      cleanup();
-
+    const child = exec(command, {
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: timeout,
+      windowsHide: false  // Explicitly allow window access for UIA
+    }, (error, stdout, stderr) => {
       if (stderr && stderr.trim()) {
         console.warn('[windows-uia] PowerShell stderr:', stderr.trim());
       }
 
-      if (killed) {
-        reject(new Error(`PowerShell timed out after ${timeout}ms`));
-      } else if (code !== 0) {
-        const fullError = [
-          `Exit code ${code}`,
-          stdout ? `stdout: ${stdout.substring(0, 500)}` : '',
-          stderr ? `stderr: ${stderr.substring(0, 500)}` : ''
-        ].filter(Boolean).join(' | ');
-        reject(new Error(`PowerShell failed: ${fullError}`));
+      if (error) {
+        if (error.killed) {
+          reject(new Error(`PowerShell timed out after ${timeout}ms`));
+        } else {
+          const fullError = [
+            error.message,
+            stdout ? `stdout: ${stdout.substring(0, 500)}` : '',
+            stderr ? `stderr: ${stderr.substring(0, 500)}` : ''
+          ].filter(Boolean).join(' | ');
+          reject(new Error(`PowerShell failed: ${fullError}`));
+        }
       } else {
-        resolve({ stdout: stdout.trim(), stderr: stderr.trim() });
+        resolve({ stdout: (stdout || '').trim(), stderr: (stderr || '').trim() });
       }
-    });
-
-    child.on('error', (err) => {
-      clearTimeout(timeoutId);
-      cleanup();
-      reject(new Error(`PowerShell spawn error: ${err.message}`));
     });
   });
 }

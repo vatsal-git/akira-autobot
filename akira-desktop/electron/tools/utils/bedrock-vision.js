@@ -301,9 +301,71 @@ Be strict - if the element is clearly off to one side, it's not at center.`;
   });
 }
 
+/**
+ * Locate an element anywhere in the image and return its offset from center
+ * @param {Object} params
+ * @param {string} params.imageBase64 - Base64 PNG image
+ * @param {string} params.elementDescription - What element to find
+ * @param {number} params.imageWidth - Width of the image in pixels
+ * @param {number} params.imageHeight - Height of the image in pixels
+ * @returns {Promise<Object>} Location result with offset from center
+ */
+async function locateElementInImage({ imageBase64, elementDescription, imageWidth, imageHeight }) {
+  const prompt = `Find the "${elementDescription}" in this image.
+The image is ${imageWidth}x${imageHeight} pixels. The center of the image is at (${Math.floor(imageWidth/2)}, ${Math.floor(imageHeight/2)}).
+
+If you find the element, provide its CENTER position as pixel offsets from the IMAGE CENTER:
+- positive offset_x means the element is to the RIGHT of image center
+- positive offset_y means the element is BELOW image center
+- negative offset_x means the element is to the LEFT of image center
+- negative offset_y means the element is ABOVE image center
+
+Look at the ENTIRE image - the element could be anywhere, including edges or corners.
+If the element is partially visible at an edge, still report its approximate center position.`;
+
+  return await analyzeImage({
+    imageBase64,
+    prompt,
+    outputFormat: 'structured'
+  });
+}
+
+/**
+ * Verify if the RED CROSSHAIR marker is on the target element
+ * @param {Object} params
+ * @param {string} params.imageBase64 - Base64 PNG image with red crosshair drawn
+ * @param {string} params.elementDescription - What element should be at the crosshair
+ * @returns {Promise<Object>} Verification result
+ */
+async function verifyCursorOnElement({ imageBase64, elementDescription }) {
+  const prompt = `Look at this image. There is a RED CROSSHAIR marker (+) drawn on the image - this shows where we want to click.
+
+Is "${elementDescription}" located at the RED CROSSHAIR position?
+
+Answer found=true if the crosshair is ON or TOUCHING the element (clicking there would hit it).
+Answer found=false if the crosshair is NOT on the element.
+
+If the element is VISIBLE in this image but the crosshair is NOT on it, provide suggested_coords as pixel offsets FROM the crosshair TO the element's center:
+- positive x = element is to the RIGHT of crosshair
+- negative x = element is to the LEFT of crosshair
+- positive y = element is BELOW crosshair
+- negative y = element is ABOVE crosshair
+
+If crosshair IS on the element, set suggested_coords to {x: 0, y: 0}.
+If element is NOT visible anywhere in image, set suggested_coords to null.`;
+
+  return await analyzeImage({
+    imageBase64,
+    prompt,
+    outputFormat: 'structured'
+  });
+}
+
 module.exports = {
   analyzeImage,
   compareImages,
   findElement,
-  verifyElementAtCenter
+  verifyElementAtCenter,
+  locateElementInImage,
+  verifyCursorOnElement
 };

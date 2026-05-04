@@ -8,85 +8,101 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { runPowerShell, getScreenSize } = require('../utils/powershell');
-const { analyzeImage, compareImages, findElement, verifyElementAtCenter } = require('../utils/bedrock-vision');
+const { captureCenteredRegion } = require('../utils/screenshot');
+const { analyzeImage, compareImages, findElement, verifyElementAtCenter, locateElementInImage, verifyCursorOnElement } = require('../utils/bedrock-vision');
 
 // Constants
-const VERIFY_REGION_SIZE = 200;      // Pre-click verification region
 const SEARCH_REGION_SIZES = [500, 800, 1200];  // Expanding search sizes
 const POST_CLICK_REGION_SIZE = 400;  // Post-click verification region
 const CONFIDENCE_THRESHOLD = 0.75;   // Minimum confidence to proceed
+
+// Confidence-based verify region scaling
+// Higher confidence from locate → larger (faster) verify region
+const VERIFY_REGION_SCALING = {
+  thresholds: [0.95, 0.85, 0.75],    // Confidence thresholds (checked in order)
+  sizes: [600, 400, 200, 200]        // Region sizes: ≥0.95→600, ≥0.85→400, ≥0.75→200, <0.75→200
+};
+const VERIFY_REGION_SIZE_DEFAULT = 200;  // Fallback for direct verification calls
 const CLICK_DELAY_MS = 300;          // Wait after click for UI to update
 const MAX_RETRIES_DEFAULT = 3;
 
+// Debug mode - saves screenshots to a folder for inspection
+const DEBUG_MODE = true;
+const DEBUG_FOLDER = path.join(os.tmpdir(), 'smart_click_debug');
+
+function ensureDebugFolder() {
+  if (DEBUG_MODE && !fs.existsSync(DEBUG_FOLDER)) {
+    fs.mkdirSync(DEBUG_FOLDER, { recursive: true });
+    console.log(`[smart-click] Debug folder: ${DEBUG_FOLDER}`);
+  }
+}
+
+function saveDebugImage(base64, label) {
+  if (!DEBUG_MODE) return null;
+  ensureDebugFolder();
+  const filename = `${Date.now()}_${label}.png`;
+  const filepath = path.join(DEBUG_FOLDER, filename);
+  fs.writeFileSync(filepath, Buffer.from(base64, 'base64'));
+  console.log(`[smart-click] DEBUG saved: ${filepath}`);
+  return filepath;
+}
+
 /**
- * Capture a screenshot region centered on coordinates
+ * Get verify region size based on locate confidence
+ * Higher confidence → larger region (faster verification)
+ * Lower confidence → smaller region (more precise verification)
+ * @param {number} confidence - Confidence from locate step (0-1)
+ * @returns {number} Region size in pixels
+ */
+function getVerifyRegionSize(confidence) {
+  const { thresholds, sizes } = VERIFY_REGION_SCALING;
+  for (let i = 0; i < thresholds.length; i++) {
+    if (confidence >= thresholds[i]) {
+      console.log(`[smart-click] Confidence ${confidence.toFixed(2)} ≥ ${thresholds[i]} → verify region ${sizes[i]}px`);
+      return sizes[i];
+    }
+  }
+  console.log(`[smart-click] Confidence ${confidence.toFixed(2)} < ${thresholds[thresholds.length - 1]} → verify region ${sizes[sizes.length - 1]}px (precise)`);
+  return sizes[sizes.length - 1];
+}
+
+/**
+ * Wrapper around centralized screenshot utility for smart click
  * @param {number} centerX - Center X coordinate
  * @param {number} centerY - Center Y coordinate
  * @param {number} size - Region size (width = height = size)
+ * @param {boolean} drawCrosshair - Whether to draw a crosshair at target position
+ * @param {string} [label] - Label for overlay display
+ * @param {boolean} [animate] - Whether to animate the overlay
  * @returns {Promise<{base64: string, region: Object}>}
  */
-async function captureRegion(centerX, centerY, size) {
-  const half = Math.floor(size / 2);
-  const screenSize = await getScreenSize();
-
-  // Calculate region bounds, clamping to screen
-  const left = Math.max(0, Math.min(centerX - half, screenSize.width - size));
-  const top = Math.max(0, Math.min(centerY - half, screenSize.height - size));
-  const width = Math.min(size, screenSize.width - left);
-  const height = Math.min(size, screenSize.height - top);
-
-  const tempFile = path.join(os.tmpdir(), `smart_click_${Date.now()}.png`);
-
-  const script = `
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-
-try {
-    $bitmap = New-Object System.Drawing.Bitmap(${width}, ${height})
-    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-    $graphics.CopyFromScreen(${left}, ${top}, 0, 0, (New-Object System.Drawing.Size(${width}, ${height})))
-    $bitmap.Save("${tempFile}")
-    $graphics.Dispose()
-    $bitmap.Dispose()
-    Write-Output "OK"
-} catch {
-    Write-Host "EXCEPTION: $($_.Exception.Message)"
-    exit 1
-}
-`;
-
-  await runPowerShell(script, { timeout: 15000 });
-
-  if (!fs.existsSync(tempFile)) {
-    throw new Error('Failed to capture screenshot region');
-  }
-
-  const imageBuffer = fs.readFileSync(tempFile);
-  const base64 = imageBuffer.toString('base64');
-
-  // Cleanup
-  try { fs.unlinkSync(tempFile); } catch {}
-
-  return {
-    base64,
-    region: { left, top, width, height },
-    center: {
-      x: left + Math.floor(width / 2),
-      y: top + Math.floor(height / 2)
-    }
-  };
+async function captureRegion(centerX, centerY, size, drawCrosshair = true, label = null, animate = false) {
+  return captureCenteredRegion(centerX, centerY, size, {
+    drawCrosshair,
+    label,
+    animate,
+    showOverlay: true
+  });
 }
 
 /**
- * Execute a mouse click at coordinates
+ * Move cursor to coordinates (without clicking)
  */
-async function executeClick(x, y, button = 'left') {
+async function moveCursor(x, y) {
   const moveScript = `
     Add-Type -AssemblyName System.Windows.Forms
     [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${x}, ${y})
     Start-Sleep -Milliseconds 50
   `;
   await runPowerShell(moveScript);
+  return { x, y };
+}
+
+/**
+ * Execute a mouse click at coordinates
+ */
+async function executeClick(x, y, button = 'left') {
+  await moveCursor(x, y);
 
   const clickFlags = button === 'right'
     ? '0x0008, 0, 0, 0, 0); $t::mouse_event(0x0010'
@@ -104,94 +120,184 @@ async function executeClick(x, y, button = 'left') {
 
 /**
  * Verify an element is at the target coordinates
+ * @param {number} x - X coordinate
+ * @param {number} y - Y coordinate
+ * @param {string} elementDescription - Description of expected element
+ * @param {number} [regionSize] - Verify region size (defaults to VERIFY_REGION_SIZE_DEFAULT)
  * @returns {Promise<{verified: boolean, confidence: number, message: string}>}
  */
-async function verifyElementPresent(x, y, elementDescription) {
-  console.log(`[smart-click] Verifying "${elementDescription}" at (${x}, ${y})`);
+async function verifyElementPresent(x, y, elementDescription, regionSize = VERIFY_REGION_SIZE_DEFAULT) {
+  console.log(`[smart-click] Verifying "${elementDescription}" at (${x}, ${y}) with ${regionSize}px region`);
 
-  const capture = await captureRegion(x, y, VERIFY_REGION_SIZE);
+  const capture = await captureRegion(x, y, regionSize, true, 'Verifying...');
+  saveDebugImage(capture.base64, `verify_${regionSize}px_${x}_${y}`);
+
   const result = await verifyElementAtCenter({
     imageBase64: capture.base64,
     elementDescription
   });
 
+  // Log full Claude response for debugging
+  console.log(`[smart-click] Claude response: found=${result.found}, confidence=${result.confidence}, desc="${result.description}"`);
+
   return {
     verified: result.found && result.confidence >= CONFIDENCE_THRESHOLD,
     confidence: result.confidence || 0,
     message: result.description || '',
-    element_type: result.element_type
+    element_type: result.element_type,
+    found: result.found  // expose the raw found value
   };
 }
 
 /**
- * Search for element by zooming out and then refining coordinates
+ * Locate element in image (can be anywhere, not just center)
+ * @returns {Promise<{found: boolean, x: number, y: number, confidence: number, offset: {x, y}}>}
+ */
+async function locateElementInRegion(centerX, centerY, size, elementDescription, animate = true) {
+  const capture = await captureRegion(centerX, centerY, size, false, 'Searching...', animate);
+  saveDebugImage(capture.base64, `locate_${size}_at_${centerX}_${centerY}`);
+
+  const result = await locateElementInImage({
+    imageBase64: capture.base64,
+    elementDescription,
+    imageWidth: capture.region.width,
+    imageHeight: capture.region.height
+  });
+
+  console.log(`[smart-click] Locate result: found=${result.found}, confidence=${result.confidence}, offset=${JSON.stringify(result.suggested_coords)}`);
+
+  if (result.found && result.suggested_coords) {
+    // Convert image offset to screen coordinates
+    const screenX = capture.center.x + (result.suggested_coords.x || 0);
+    const screenY = capture.center.y + (result.suggested_coords.y || 0);
+
+    return {
+      found: true,
+      x: Math.round(screenX),
+      y: Math.round(screenY),
+      confidence: result.confidence,
+      message: result.description
+    };
+  }
+
+  return {
+    found: false,
+    x: centerX,
+    y: centerY,
+    confidence: result.confidence || 0,
+    message: result.description || 'Element not found'
+  };
+}
+
+/**
+ * Iterative locate-move-verify approach
+ * 1. Take screenshot, find element anywhere in image
+ * 2. Move cursor to found coordinates
+ * 3. Take new screenshot, verify cursor is on element
+ * 4. If not on element, get adjustment and repeat
  * @returns {Promise<{found: boolean, x: number, y: number, confidence: number}>}
  */
-async function searchWithZoom(startX, startY, elementDescription) {
-  console.log(`[smart-click] Searching for "${elementDescription}" with zoom-out strategy`);
+async function locateAndMoveToElement(startX, startY, elementDescription, maxAdjustments = 3) {
+  console.log(`[smart-click] Locating "${elementDescription}" with iterative approach`);
 
+  let currentX = startX;
+  let currentY = startY;
+
+  // Try progressively larger search regions
   for (const size of SEARCH_REGION_SIZES) {
-    console.log(`[smart-click] Trying ${size}x${size} region`);
+    console.log(`[smart-click] Searching in ${size}x${size} region around (${currentX}, ${currentY})`);
 
-    const capture = await captureRegion(startX, startY, size);
-    const result = await findElement({
-      imageBase64: capture.base64,
-      elementDescription,
-      imageCenterX: capture.center.x,
-      imageCenterY: capture.center.y
-    });
+    // Step 1: Locate element in the region
+    const locateResult = await locateElementInRegion(currentX, currentY, size, elementDescription);
 
-    if (result.found && result.confidence >= 0.6 && result.screen_coords) {
-      const newX = Math.round(result.screen_coords.x);
-      const newY = Math.round(result.screen_coords.y);
+    if (!locateResult.found) {
+      console.log(`[smart-click] Element not found in ${size}x${size} region`);
+      continue;
+    }
 
-      console.log(`[smart-click] Found candidate at (${newX}, ${newY}), verifying...`);
+    console.log(`[smart-click] Element located at (${locateResult.x}, ${locateResult.y}) with confidence ${locateResult.confidence}`);
 
-      // Verify with a tight zoom
-      const verifyCapture = await captureRegion(newX, newY, VERIFY_REGION_SIZE);
-      const verify = await verifyElementAtCenter({
+    // Step 2: Determine verify region size based on locate confidence
+    const verifySize = getVerifyRegionSize(locateResult.confidence);
+
+    // Step 3: Move cursor to found location and iteratively refine
+    let targetX = locateResult.x;
+    let targetY = locateResult.y;
+
+    for (let adjustment = 0; adjustment < maxAdjustments; adjustment++) {
+      console.log(`[smart-click] Moving cursor to (${targetX}, ${targetY}), adjustment ${adjustment + 1}/${maxAdjustments}`);
+      await moveCursor(targetX, targetY);
+
+      // Step 4: Take screenshot with confidence-based region size and verify cursor is on element
+      const verifyCapture = await captureRegion(targetX, targetY, verifySize, true, 'Verifying...');
+      saveDebugImage(verifyCapture.base64, `verify_${verifySize}px_cursor_${adjustment}_${targetX}_${targetY}`);
+
+      // Crosshair is drawn on the image - Claude will look for it
+      const verify = await verifyCursorOnElement({
         imageBase64: verifyCapture.base64,
         elementDescription
       });
 
+      console.log(`[smart-click] Crosshair at: (${verifyCapture.targetInImage.x}, ${verifyCapture.targetInImage.y}) in image`);
+      console.log(`[smart-click] Verify result: found=${verify.found}, confidence=${verify.confidence}, adjustment=${JSON.stringify(verify.suggested_coords)}`);
+
       if (verify.found && verify.confidence >= CONFIDENCE_THRESHOLD) {
+        console.log(`[smart-click] Cursor confirmed on element at (${targetX}, ${targetY})`);
         return {
           found: true,
-          x: newX,
-          y: newY,
+          x: targetX,
+          y: targetY,
           confidence: verify.confidence,
           message: verify.description
         };
       }
 
-      console.log(`[smart-click] Verification failed (confidence: ${verify.confidence}), continuing search`);
+      // Step 4: If not on element, apply adjustment offset
+      if (verify.suggested_coords && (verify.suggested_coords.x !== 0 || verify.suggested_coords.y !== 0)) {
+        const oldX = targetX;
+        const oldY = targetY;
+        targetX = Math.round(targetX + (verify.suggested_coords.x || 0));
+        targetY = Math.round(targetY + (verify.suggested_coords.y || 0));
+        console.log(`[smart-click] Adjusting from (${oldX}, ${oldY}) to (${targetX}, ${targetY})`);
+      } else {
+        // No adjustment suggested, break out of adjustment loop
+        console.log(`[smart-click] No adjustment suggested, trying next region size`);
+        break;
+      }
     }
   }
 
   // Try full screen as last resort
   console.log('[smart-click] Trying full screen search');
   const screenSize = await getScreenSize();
-  const fullCapture = await captureRegion(
+  const fullResult = await locateElementInRegion(
     Math.floor(screenSize.width / 2),
     Math.floor(screenSize.height / 2),
-    Math.min(screenSize.width, screenSize.height)
+    Math.min(screenSize.width, screenSize.height),
+    elementDescription
   );
 
-  const fullResult = await findElement({
-    imageBase64: fullCapture.base64,
-    elementDescription,
-    imageCenterX: Math.floor(screenSize.width / 2),
-    imageCenterY: Math.floor(screenSize.height / 2)
-  });
+  if (fullResult.found) {
+    // Move to found location and do one verification with confidence-based region size
+    const fullScreenVerifySize = getVerifyRegionSize(fullResult.confidence);
+    await moveCursor(fullResult.x, fullResult.y);
+    const verifyCapture = await captureRegion(fullResult.x, fullResult.y, fullScreenVerifySize, true, 'Verifying...');
+    saveDebugImage(verifyCapture.base64, `verify_${fullScreenVerifySize}px_fullscreen_${fullResult.x}_${fullResult.y}`);
 
-  if (fullResult.found && fullResult.screen_coords) {
-    return {
-      found: true,
-      x: Math.round(fullResult.screen_coords.x),
-      y: Math.round(fullResult.screen_coords.y),
-      confidence: fullResult.confidence,
-      message: fullResult.description
-    };
+    const verify = await verifyCursorOnElement({
+      imageBase64: verifyCapture.base64,
+      elementDescription
+    });
+
+    if (verify.found) {
+      return {
+        found: true,
+        x: fullResult.x,
+        y: fullResult.y,
+        confidence: verify.confidence,
+        message: verify.description
+      };
+    }
   }
 
   return {
@@ -199,7 +305,7 @@ async function searchWithZoom(startX, startY, elementDescription) {
     x: startX,
     y: startY,
     confidence: 0,
-    message: 'Element not found in any search region'
+    message: 'Element not found after all search attempts'
   };
 }
 
@@ -211,7 +317,7 @@ async function verifyClickSucceeded(x, y, beforeBase64, expectedChange) {
   await new Promise(resolve => setTimeout(resolve, CLICK_DELAY_MS));
 
   // Capture after state
-  const afterCapture = await captureRegion(x, y, POST_CLICK_REGION_SIZE);
+  const afterCapture = await captureRegion(x, y, POST_CLICK_REGION_SIZE, false, 'Checking...');
 
   if (expectedChange) {
     // Use Claude to compare
@@ -244,6 +350,12 @@ async function verifyClickSucceeded(x, y, beforeBase64, expectedChange) {
 async function smartClick(input) {
   const { x, y, expected_element, expected_change, button = 'left', max_retries = MAX_RETRIES_DEFAULT } = input;
 
+  // Announce debug folder at start
+  if (DEBUG_MODE) {
+    ensureDebugFolder();
+    console.log(`[smart-click] DEBUG MODE ON - screenshots saved to: ${DEBUG_FOLDER}`);
+  }
+
   if (x == null || y == null) {
     return { success: false, error: 'x and y coordinates are required' };
   }
@@ -259,54 +371,35 @@ async function smartClick(input) {
 
   while (attempt < max_retries) {
     attempt++;
-    console.log(`[smart-click] Attempt ${attempt}/${max_retries} at (${currentX}, ${currentY})`);
+    console.log(`[smart-click] Attempt ${attempt}/${max_retries} starting from (${currentX}, ${currentY})`);
 
     const attemptLog = {
       attempt,
-      target: { x: currentX, y: currentY },
-      pre_verify: null,
-      search: null,
+      original_target: { x: currentX, y: currentY },
+      locate: null,
       click: null,
       post_verify: null
     };
 
-    // PHASE 1: Pre-click verification
-    const preVerify = await verifyElementPresent(currentX, currentY, expected_element);
-    attemptLog.pre_verify = preVerify;
+    // PHASE 1: Locate element and move cursor to it (iterative approach)
+    const locateResult = await locateAndMoveToElement(currentX, currentY, expected_element);
+    attemptLog.locate = locateResult;
 
-    if (!preVerify.verified) {
-      console.log(`[smart-click] Element not at (${currentX}, ${currentY}), searching...`);
-
-      // PHASE 1b: Search with zoom-out
-      const searchResult = await searchWithZoom(currentX, currentY, expected_element);
-      attemptLog.search = searchResult;
-
-      if (!searchResult.found) {
-        attempts.push(attemptLog);
-        console.log('[smart-click] Could not find element, will retry');
-        continue;
-      }
-
-      // Update coordinates to found location
-      currentX = searchResult.x;
-      currentY = searchResult.y;
-      attemptLog.target = { x: currentX, y: currentY };
-
-      // Re-verify at new location
-      const reVerify = await verifyElementPresent(currentX, currentY, expected_element);
-      attemptLog.pre_verify = reVerify;
-
-      if (!reVerify.verified) {
-        attempts.push(attemptLog);
-        console.log('[smart-click] Verification failed at new coordinates');
-        continue;
-      }
+    if (!locateResult.found) {
+      attempts.push(attemptLog);
+      console.log('[smart-click] Could not locate element, will retry');
+      continue;
     }
 
-    // PHASE 2: Capture before state for comparison
-    const beforeCapture = await captureRegion(currentX, currentY, POST_CLICK_REGION_SIZE);
+    // Update coordinates to found location
+    currentX = locateResult.x;
+    currentY = locateResult.y;
+    attemptLog.final_target = { x: currentX, y: currentY };
 
-    // PHASE 3: Execute click
+    // PHASE 2: Capture before state for comparison
+    const beforeCapture = await captureRegion(currentX, currentY, POST_CLICK_REGION_SIZE, false, 'Ready to click', false);
+
+    // PHASE 3: Execute click (cursor is already positioned)
     console.log(`[smart-click] Clicking at (${currentX}, ${currentY})`);
     const clickResult = await executeClick(currentX, currentY, button);
     attemptLog.click = clickResult;
@@ -329,7 +422,7 @@ async function smartClick(input) {
         coordinates_adjusted: (currentX !== x || currentY !== y),
         attempts: attempt,
         verification: {
-          pre_click_confidence: attemptLog.pre_verify.confidence,
+          locate_confidence: locateResult.confidence,
           post_click: postVerify
         },
         attempt_log: attempts

@@ -39,5 +39,15 @@ contextBridge.exposeInMainWorld('overlay', {
     const handler = () => callback();
     ipcRenderer.on('overlay-hide-all', handler);
     return () => ipcRenderer.removeListener('overlay-hide-all', handler);
-  }
+  },
+
+  // Listen for overlay hidden state changes
+  onSetHidden: (callback) => {
+    const handler = (event, hidden) => callback(hidden);
+    ipcRenderer.on('overlay-set-hidden', handler);
+    return () => ipcRenderer.removeListener('overlay-set-hidden', handler);
+  },
+
+  // Get initial hidden state
+  getHiddenState: () => ipcRenderer.invoke('get-overlay-hidden-state')
 });

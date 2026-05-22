@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import '../styles/message-list.css';
 import { AgentActivityChip, AgentDelegationChip } from './AgentActivityChip';
 import { EmergencyStopAlert, ClarificationRequest, InternalTaskIndicator } from './AlertComponents';
+import InlineTodoList from './InlineTodoList';
 
 // Regex to match @path patterns (paths starting with @ followed by drive letter or /)
 const FILE_PATH_REGEX = /@([A-Za-z]:[^\s\n]+|\/[^\s\n]+)/g;
@@ -122,45 +123,50 @@ function ReasoningChip({ reasoning, isConnected }) {
 }
 
 // Tool call chip component (minimal trail style)
-function ToolCallChip({ tool, isConnected }) {
+function ToolCallChip({ tool, isConnected, todoList }) {
   const [expanded, setExpanded] = useState(false);
   const isRunning = tool.status === 'running';
   const dotClass = isRunning ? 'trail-item__dot--running' : 'trail-item__dot--completed';
+  const isTodoTool = tool.name === 'create_todo' || tool.name === 'update_todo';
+  const showTodoList = isTodoTool && tool.status === 'completed' && todoList;
 
   return (
-    <div className={`trail-item ${isConnected ? 'trail-item--connected' : ''}`}>
-      <div className="trail-item__line" />
-      <div className={`trail-item__dot ${dotClass}`} />
-      <div className="trail-item__content">
-        <div className="trail-item__header" onClick={() => setExpanded(!expanded)}>
-          <span className="trail-item__name">
-            {tool.name}
-            {tool.agent && <span className="trail-item__agent">({tool.agent})</span>}
-          </span>
-          <span className={`trail-item__chevron ${expanded ? 'trail-item__chevron--open' : ''}`}>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polyline points="9 18 15 12 9 6" />
-            </svg>
-          </span>
-        </div>
-        {expanded && (
-          <div className="trail-item__dropdown">
-            <div className="trail-item__section">
-              <span className="trail-item__label">Input</span>
-              <pre className="trail-item__json">{JSON.stringify(tool.input, null, 2)}</pre>
-            </div>
-            {tool.result && (
-              <div className="trail-item__section">
-                <span className="trail-item__label">Output</span>
-                <div className="trail-item__result">
-                  {renderValue(tool.result)}
-                </div>
-              </div>
-            )}
+    <>
+      <div className={`trail-item ${isConnected ? 'trail-item--connected' : ''}`}>
+        <div className="trail-item__line" />
+        <div className={`trail-item__dot ${dotClass}`} />
+        <div className="trail-item__content">
+          <div className="trail-item__header" onClick={() => setExpanded(!expanded)}>
+            <span className="trail-item__name">
+              {tool.name}
+              {tool.agent && <span className="trail-item__agent">({tool.agent})</span>}
+            </span>
+            <span className={`trail-item__chevron ${expanded ? 'trail-item__chevron--open' : ''}`}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </span>
           </div>
-        )}
+          {expanded && (
+            <div className="trail-item__dropdown">
+              <div className="trail-item__section">
+                <span className="trail-item__label">Input</span>
+                <pre className="trail-item__json">{JSON.stringify(tool.input, null, 2)}</pre>
+              </div>
+              {tool.result && (
+                <div className="trail-item__section">
+                  <span className="trail-item__label">Output</span>
+                  <div className="trail-item__result">
+                    {renderValue(tool.result)}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+      {showTodoList && <InlineTodoList todoList={todoList} />}
+    </>
   );
 }
 
@@ -227,7 +233,7 @@ function CodeBlock({ className, children, ...props }) {
   );
 }
 
-function MessageList({ messages, isStreaming, onRegenerate, onContinue, onEmergencyResponse, onClarificationResponse }) {
+function MessageList({ messages, isStreaming, onRegenerate, onContinue, onEmergencyResponse, onClarificationResponse, todoList }) {
   // Render user, assistant, tool, reasoning, agent, emergency, and clarification messages
   // Skip empty assistant messages and internal-only items
   const displayMessages = messages.filter((m) => {
@@ -276,7 +282,7 @@ function MessageList({ messages, isStreaming, onRegenerate, onContinue, onEmerge
         const isConnected = isTrailItem(message) && isTrailItem(prevMessage);
 
         return message.type === 'tool' ? (
-          <ToolCallChip key={message.toolId || index} tool={message} isConnected={isConnected} />
+          <ToolCallChip key={message.toolId || index} tool={message} isConnected={isConnected} todoList={todoList} />
         ) : message.type === 'reasoning' ? (
           <ReasoningChip key={`reasoning-${index}`} reasoning={message} isConnected={isConnected} />
         ) : message.type === 'agent' ? (

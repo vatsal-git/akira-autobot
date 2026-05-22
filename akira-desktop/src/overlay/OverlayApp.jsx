@@ -13,12 +13,18 @@ import './styles/overlay.css';
 function OverlayApp() {
   const [agentActive, setAgentActive] = useState(false);
   const [screenshotActive, setScreenshotActive] = useState(false);
+  const [isHidden, setIsHidden] = useState(false);
 
   useEffect(() => {
     if (!window.overlay) {
       console.warn('Overlay API not available');
       return;
     }
+
+    // Fetch initial hidden state
+    window.overlay.getHiddenState?.().then((hidden) => {
+      setIsHidden(hidden);
+    });
 
     // Listen for border state changes
     const borderCleanup = window.overlay.onBorder?.((data) => {
@@ -40,12 +46,22 @@ function OverlayApp() {
       setScreenshotActive(false);
     });
 
+    // Listen for overlay hidden state changes
+    const setHiddenCleanup = window.overlay.onSetHidden?.((hidden) => {
+      setIsHidden(hidden);
+    });
+
     return () => {
       if (borderCleanup) borderCleanup();
       if (screenshotCleanup) screenshotCleanup();
       if (hideAllCleanup) hideAllCleanup();
+      if (setHiddenCleanup) setHiddenCleanup();
     };
   }, []);
+
+  if (isHidden) {
+    return <div className="overlay-container" />;
+  }
 
   return (
     <div className="overlay-container">

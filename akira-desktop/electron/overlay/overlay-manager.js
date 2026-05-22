@@ -189,6 +189,16 @@ function getWindow() {
   return overlayWindow;
 }
 
+/**
+ * Set whether overlay visuals should be hidden
+ * @param {boolean} hidden - Whether to hide overlay elements
+ */
+function setOverlayHidden(hidden) {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send('overlay-set-hidden', hidden);
+  }
+}
+
 module.exports = {
   createOverlayWindow,
   showAgentActive,
@@ -198,5 +208,6 @@ module.exports = {
   hideAll,
   destroy,
   isReady,
-  getWindow
+  getWindow,
+  setOverlayHidden
 };

@@ -73,6 +73,7 @@ const store = new Store({
     wasVisible: true,
     reasoningEnabled: true,
     disabledTools: [], // Array of tool names to disable
+    hideDesktopOverlay: false, // Hide overlay visual feedback (red border, blue overlay, etc.)
     // Provider settings
     selectedProvider: 'openrouter',
     selectedModel: 'openrouter/auto',
@@ -399,6 +400,21 @@ function registerGlobalShortcut() {
 
 // App lifecycle
 app.whenReady().then(async () => {
+  const {fetchUrl} = require("./tools/web/web-search");
+  
+  
+  console.log('Calling search...')
+  try{
+    const searchUrl = `httpsapi.duckduckgo.com//?callback=%3C%3E&format=%3C%3E&no_html=%3C%3E&no_redirect=%3C%3E&q=%3C%3E&skip_disambig=%3C%3E`;
+    console.log({searchUrl})
+  
+    const response = await fetchUrl(searchUrl);
+
+    console.log({response})
+  } catch(err){
+    console.log(err)
+  }
+
   // Load persistent chat history
   loadPersistentHistory();
 
@@ -503,6 +519,7 @@ ipcMain.handle('get-settings', () => {
     defaultModel: store.get('defaultModel', 'openrouter/free'), // Legacy
     reasoningEnabled: store.get('reasoningEnabled', true),
     disabledTools: store.get('disabledTools', []),
+    hideDesktopOverlay: store.get('hideDesktopOverlay', false),
     // Provider settings
     selectedProvider: store.get('selectedProvider', 'openrouter'),
     selectedModel: store.get('selectedModel', 'openrouter/auto'),
@@ -519,6 +536,12 @@ ipcMain.handle('save-settings', (event, settings) => {
   Object.keys(settings).forEach(key => {
     store.set(key, settings[key]);
   });
+
+  // Notify overlay if hideDesktopOverlay changed
+  if ('hideDesktopOverlay' in settings) {
+    overlayManager.setOverlayHidden(settings.hideDesktopOverlay);
+  }
+
   return true;
 });
 
@@ -1026,6 +1049,11 @@ ipcMain.handle('get-bedrock-credentials', () => {
 ipcMain.handle('set-bedrock-credentials', (event, credentials) => {
   store.set('bedrockCredentials', credentials);
   return true;
+});
+
+// Get overlay hidden state (for overlay window initialization)
+ipcMain.handle('get-overlay-hidden-state', () => {
+  return store.get('hideDesktopOverlay', false);
 });
 
 // Get model-specific settings

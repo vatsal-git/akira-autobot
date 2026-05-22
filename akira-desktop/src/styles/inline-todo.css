@@ -1,0 +1,120 @@
+/* Inline Todo List - shown after todo tool calls */
+.inline-todo {
+  margin: 4px 0 8px 24px;
+  padding: 8px 12px;
+  background: rgba(40, 40, 40, 0.5);
+  border-radius: 8px;
+  border-left: 2px solid rgba(255, 255, 255, 0.1);
+}
+
+.inline-todo__items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.inline-todo__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.inline-todo__checkbox {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Pending - muted checkbox */
+.inline-todo__item--pending .inline-todo__checkbox {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+/* In progress - spinner */
+.inline-todo__item--in_progress .inline-todo__checkbox {
+  color: #60a5fa;
+}
+
+.inline-todo__spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(96, 165, 250, 0.2);
+  border-top-color: #60a5fa;
+  border-radius: 50%;
+  animation: inline-todo-spin 0.8s linear infinite;
+}
+
+@keyframes inline-todo-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Completed - green with check */
+.inline-todo__item--completed .inline-todo__checkbox {
+  color: #4ade80;
+}
+
+.inline-todo__item--completed .inline-todo__text {
+  text-decoration: line-through;
+  opacity: 0.5;
+}
+
+/* Failed - red with X */
+.inline-todo__item--failed .inline-todo__checkbox {
+  color: #f87171;
+}
+
+.inline-todo__item--failed .inline-todo__text {
+  color: #f87171;
+  opacity: 0.7;
+}
+
+.inline-todo__text {
+  font-size: 12px;
+  color: var(--color-text);
+  line-height: 1.4;
+}
+
+/* Expand button */
+.inline-todo__expand {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.inline-todo__expand:hover {
+  opacity: 1;
+}
+
+.inline-todo__expand-icon--up {
+  transform: rotate(180deg);
+}
+
+/* Light theme */
+.theme-light .inline-todo {
+  background: rgba(0, 0, 0, 0.04);
+  border-left-color: rgba(0, 0, 0, 0.1);
+}
+
+.theme-light .inline-todo__item--pending .inline-todo__checkbox {
+  color: rgba(0, 0, 0, 0.25);
+}
+
+.theme-light .inline-todo__spinner {
+  border-color: rgba(59, 130, 246, 0.2);
+  border-top-color: #3b82f6;
+}

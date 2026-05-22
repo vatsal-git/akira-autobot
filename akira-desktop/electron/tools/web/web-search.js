@@ -6,6 +6,7 @@
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
+const duckDuckGoSearch = require("duckduckgo-search");
 const { startTask } = require('../../agents/async-task-manager');
 
 /**
@@ -123,6 +124,7 @@ const definitions = [
 async function executeSearch(query, resultsCount) {
   // Use DuckDuckGo HTML search (no API key needed)
   const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  console.log({searchUrl})
 
   const response = await fetchUrl(searchUrl);
 
@@ -197,4 +199,4 @@ const handlers = {
   },
 };
 
-module.exports = { definitions, handlers };
+module.exports = { definitions, handlers, fetchUrl };

@@ -584,6 +584,19 @@
   margin-bottom: 0;
 }
 
+.settings-panel__toggle-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-panel__toggle-info .settings-panel__section-title {
+  margin-bottom: 2px;
+}
+
+.settings-panel__hint--inline {
+  margin-top: 0;
+}
+
 .settings-panel__toggle {
   position: relative;
   width: 40px;

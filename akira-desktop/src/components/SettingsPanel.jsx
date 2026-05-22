@@ -336,6 +336,24 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
         </p>
       </div>
 
+      {/* Hide Desktop Overlay Toggle */}
+      <div className="settings-panel__section">
+        <div className="settings-panel__toggle-row">
+          <div className="settings-panel__toggle-info">
+            <h3 className="settings-panel__section-title">Hide Desktop Overlay</h3>
+            <p className="settings-panel__hint settings-panel__hint--inline">Hide visual feedback during automation</p>
+          </div>
+          <button
+            className={`settings-panel__toggle ${localSettings.hideDesktopOverlay ? 'settings-panel__toggle--active' : ''}`}
+            onClick={() => updateSetting('hideDesktopOverlay', !localSettings.hideDesktopOverlay)}
+            role="switch"
+            aria-checked={localSettings.hideDesktopOverlay}
+          >
+            <span className="settings-panel__toggle-slider" />
+          </button>
+        </div>
+      </div>
+
       {/* Reset */}
       <div className="settings-panel__section">
         <button

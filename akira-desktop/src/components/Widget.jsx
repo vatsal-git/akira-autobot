@@ -3,11 +3,10 @@ import ChatInput from './ChatInput';
 import MessageList from './MessageList';
 import SettingsPanel from './SettingsPanel';
 import SetupPanel from './SetupPanel';
-import TodoPanel from './TodoPanel';
 import '../styles/widget.css';
 import '../styles/alerts.css';
-import '../styles/todo-panel.css';
 import '../styles/setup-panel.css';
+import '../styles/inline-todo.css';
 
 const CORNERS = ['bottom-right', 'bottom-left', 'top-right', 'top-left'];
 const SIDEBAR_POSITIONS = ['right', 'left'];
@@ -30,7 +29,6 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
   const [isMaximized, setIsMaximized] = useState(false);
   const [copiedChat, setCopiedChat] = useState(false);
   const [todoList, setTodoList] = useState(null);
-  const [todoCollapsed, setTodoCollapsed] = useState(false);
   const messagesEndRef = useRef(null);
   const currentContentRef = useRef('');
   const lastRelocateTime = useRef(0);
@@ -543,7 +541,6 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
 
       case 'todo_created':
         setTodoList(data.data);
-        setTodoCollapsed(false); // Auto-expand when created
         break;
 
       case 'todo_updated':
@@ -1185,13 +1182,6 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
         </div>
       ) : (
         <>
-          {/* Todo List Panel */}
-          <TodoPanel
-            todoList={todoList}
-            isCollapsed={todoCollapsed}
-            onToggle={() => setTodoCollapsed(!todoCollapsed)}
-          />
-
           {/* Messages */}
           <div className="widget__messages">
             {messages.length === 0 ? (
@@ -1208,6 +1198,7 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
                   onContinue={handleContinue}
                   onEmergencyResponse={handleEmergencyResponse}
                   onClarificationResponse={handleClarificationResponse}
+                  todoList={todoList}
                 />
                 <div ref={messagesEndRef} />
               </>

@@ -6,7 +6,7 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const shellSession = require('./shell-session');
+const shellSession = require('../utils/shell-session');
 const { startTask } = require('../../agents/async-task-manager');
 
 // Event emitter for streaming output (set by main process)

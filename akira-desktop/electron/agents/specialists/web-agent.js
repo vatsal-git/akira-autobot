@@ -4,7 +4,7 @@
  */
 
 const { BaseAgent } = require('../base-agent');
-const getWebAgentPrompt = require('../prompts/web-agent');
+const { getPrompt } = require('../prompt-manager');
 
 // Import web tools
 const webSearch = require('../../tools/web/web-search');
@@ -33,7 +33,7 @@ function createWebAgent(communicationTools = { definitions: [], handlers: {} }) 
     name: 'samba',
     displayName: 'Samba',
     description: 'Search the internet and fetch content from webpages',
-    systemPrompt: getWebAgentPrompt(),
+    systemPrompt: getPrompt('samba'),
     toolDefinitions,
     toolHandlers
   });

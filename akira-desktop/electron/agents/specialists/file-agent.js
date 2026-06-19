@@ -4,7 +4,7 @@
  */
 
 const { BaseAgent } = require('../base-agent');
-const getFileAgentPrompt = require('../prompts/file-agent');
+const { getPrompt } = require('../prompt-manager');
 
 // Import file operation tools
 const readFile = require('../../tools/file-operations/read-file');
@@ -39,7 +39,7 @@ function createFileAgent(communicationTools = { definitions: [], handlers: {} })
     name: 'dobby',
     displayName: 'Dobby',
     description: 'File system operations: reading, writing, patching files, and listing directories',
-    systemPrompt: getFileAgentPrompt(),
+    systemPrompt: getPrompt('dobby'),
     toolDefinitions,
     toolHandlers
   });

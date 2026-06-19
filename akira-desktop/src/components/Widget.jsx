@@ -21,7 +21,7 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
   const [showHistory, setShowHistory] = useState(false);
   const [chatHistory, setChatHistory] = useState([]);
   const [currentCorner, setCurrentCorner] = useState(settings?.corner || 'bottom-right');
-  const [liveMode, setLiveMode] = useState(false);
+  const [ttsEnabled, setTtsEnabled] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -29,7 +29,10 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
   const [isMaximized, setIsMaximized] = useState(false);
   const [copiedChat, setCopiedChat] = useState(false);
   const [todoList, setTodoList] = useState(null);
+  const [showScrollBottomBtn, setShowScrollBottomBtn] = useState(false);
   const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
+  const isAtBottomRef = useRef(true);
   const currentContentRef = useRef('');
   const lastRelocateTime = useRef(0);
   const reasoningBreakRef = useRef(true); // Track if we need a new reasoning block
@@ -137,48 +140,101 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
     }
   }, [settings?.theme]);
 
-  // Keyboard shortcut for moving window: Ctrl+A followed by arrow keys
+  // Start a new chat
+  const handleNewChat = useCallback(async () => {
+    // Save current chat if it has messages
+    if (chatId && messages.length > 0 && window.akira?.saveChat) {
+      const userMessages = messages.filter(m => m.role !== 'system');
+      if (userMessages.length > 0) {
+        await window.akira.saveChat(chatId, messages);
+      }
+    }
+    setMessages([]);
+    setChatId(null);
+    setShowHistory(false);
+    setTodoList(null); // Clear todo list for new chat
+    // Auto-focus input for new chat
+    setTimeout(() => {
+      const textarea = document.querySelector('.chat-input__textarea');
+      if (textarea) textarea.focus();
+    }, 50);
+  }, [chatId, messages]);
+
+  const handleNewChatRef = useRef(handleNewChat);
+  useEffect(() => {
+    handleNewChatRef.current = handleNewChat;
+  }, [handleNewChat]);
+
+  // Keyboard shortcuts: Ctrl+A followed by arrow keys (move window), and Ctrl+A+N (new chat)
   useEffect(() => {
     let moveMode = false;
     let moveModeTimeout = null;
+    let aPressed = false;
 
     const handleKeyDown = (e) => {
       const widgetMode = settings?.widgetMode || 'compact';
+      const key = e.key.toLowerCase();
 
-      // Window mode has no movement shortcuts
-      if (widgetMode === 'window') return;
+      // Track if 'a' key is pressed
+      if (key === 'a') {
+        aPressed = true;
+      }
 
-      // Ctrl+A to enter move mode (but not if in a text input to avoid conflict with select-all)
-      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a') {
+      // 1. Simultaneous Shortcut: Ctrl+A+N pressed together
+      // Works anywhere (even inside input textareas/inputs)
+      if (e.ctrlKey && key === 'n' && aPressed) {
+        e.preventDefault();
+        // Blur active element to clear focus/selection from input
+        if (document.activeElement) {
+          document.activeElement.blur();
+        }
+        handleNewChatRef.current();
+        return;
+      }
+
+      // 2. Sequential Chord Trigger: Ctrl+A (when not in a text input to avoid conflict with select-all)
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && key === 'a') {
         const tagName = e.target.tagName;
         const isInput = tagName === 'INPUT' || tagName === 'TEXTAREA' || e.target.isContentEditable;
 
         // In inputs, let Ctrl+A work normally for select-all
-        // User needs to click outside input first to use move shortcuts
+        // User needs to click outside input first to use move/chord shortcuts
         if (isInput) return;
 
         e.preventDefault();
         moveMode = true;
         clearTimeout(moveModeTimeout);
-        // Move mode expires after 1.5 seconds
+        // Shortcut mode expires after 1.5 seconds
         moveModeTimeout = setTimeout(() => { moveMode = false; }, 1500);
         return;
       }
 
-      // Arrow keys in move mode
-      if (moveMode && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+      // 3. Sequential Chord Action: Ctrl+A followed by N (opens a new chat)
+      if (moveMode && key === 'n') {
+        e.preventDefault();
+        moveMode = false;
+        clearTimeout(moveModeTimeout);
+        handleNewChatRef.current();
+        return;
+      }
+
+      // 4. Sequential Chord Action: Ctrl+A followed by Arrow Keys (moves the window)
+      if (moveMode && ['arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
+        // Window mode has no movement shortcuts
+        if (widgetMode === 'window') return;
+
         e.preventDefault();
         moveMode = false;
         clearTimeout(moveModeTimeout);
 
         // Map arrow to direction
         const directionMap = {
-          'ArrowUp': 'up',
-          'ArrowDown': 'down',
-          'ArrowLeft': 'left',
-          'ArrowRight': 'right'
+          'arrowup': 'up',
+          'arrowdown': 'down',
+          'arrowleft': 'left',
+          'arrowright': 'right'
         };
-        const direction = directionMap[e.key];
+        const direction = directionMap[key];
 
         // Sidebar mode: only allow left/right
         if (widgetMode === 'sidebar' && (direction === 'up' || direction === 'down')) {
@@ -192,9 +248,24 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
       }
     };
 
+    const handleKeyUp = (e) => {
+      if (e.key.toLowerCase() === 'a') {
+        aPressed = false;
+      }
+    };
+
+    const handleBlur = () => {
+      aPressed = false;
+      moveMode = false;
+    };
+
     window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
       clearTimeout(moveModeTimeout);
     };
   }, [settings?.widgetMode]);
@@ -208,17 +279,17 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
     window.speechSynthesis.onvoiceschanged = loadVoices;
   }, []);
 
-  // Stop speech when live mode is turned off
+  // Stop speech when TTS is turned off
   useEffect(() => {
-    if (!liveMode) {
+    if (!ttsEnabled) {
       window.speechSynthesis.cancel();
       lastSpokenRef.current = '';
     }
-  }, [liveMode]);
+  }, [ttsEnabled]);
 
-  // Text-to-speech for Akira's responses in live mode
+  // Text-to-speech for Akira's responses when enabled
   const speakText = useCallback((text, forceSpeak = false) => {
-    if (!liveMode || !text) return;
+    if (!ttsEnabled || !text) return;
 
     // Only speak new content
     const newContent = text.slice(lastSpokenRef.current.length);
@@ -251,7 +322,7 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
 
     window.speechSynthesis.speak(utterance);
     lastSpokenRef.current = text;
-  }, [liveMode]);
+  }, [ttsEnabled]);
 
   // Handle stream events from chat
   const handleStreamEvent = useCallback((data) => {
@@ -332,7 +403,7 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
         });
 
         // Speak incrementally as text streams in
-        if (liveMode) {
+        if (ttsEnabled) {
           speakText(currentContentRef.current);
         }
         break;
@@ -444,8 +515,8 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
         break;
 
       case 'done':
-        // Speak any remaining content in live mode
-        if (liveMode && currentContentRef.current) {
+        // Speak any remaining content
+        if (ttsEnabled && currentContentRef.current) {
           speakText(currentContentRef.current, true);
         }
         // Play beep sound on generation complete
@@ -518,6 +589,29 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
         setMessages(prev => {
           const newMessages = [...prev];
           const lastIdx = newMessages.length - 1;
+          
+          let rawError = data.data.error || 'Something went wrong';
+          let cleanError = rawError;
+          if (typeof rawError === 'string') {
+            const jsonStartIdx = rawError.indexOf('{');
+            if (jsonStartIdx !== -1) {
+              const prefix = rawError.substring(0, jsonStartIdx);
+              const jsonPart = rawError.substring(jsonStartIdx);
+              try {
+                const parsed = JSON.parse(jsonPart);
+                if (parsed) {
+                  if (parsed.error && typeof parsed.error.message === 'string') {
+                    cleanError = `${prefix}${parsed.error.message}`;
+                  } else if (typeof parsed.message === 'string') {
+                    cleanError = `${prefix}${parsed.message}`;
+                  }
+                }
+              } catch (e) {
+                // Ignore parse errors
+              }
+            }
+          }
+
           // If we have a partial response, keep it and mark as incomplete
           if (lastIdx >= 0 && newMessages[lastIdx].role === 'assistant' && partialContent) {
             newMessages[lastIdx] = {
@@ -525,13 +619,13 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
               content: partialContent,
               error: true,
               incomplete: true,
-              errorMessage: data.data.error || 'Something went wrong',
+              errorMessage: cleanError,
             };
           } else {
             // No partial content, just add error message
             newMessages.push({
               role: 'assistant',
-              content: `Error: ${data.data.error || 'Something went wrong'}`,
+              content: `Error: ${cleanError}`,
               error: true,
             });
           }
@@ -572,7 +666,7 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
       default:
         break;
     }
-  }, [liveMode, speakText]);
+  }, [ttsEnabled, speakText]);
 
   // Set up event listeners
   useEffect(() => {
@@ -616,12 +710,42 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
     };
   }, [handleStreamEvent]);
 
-  // Scroll to bottom when messages change
-  useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+  // Scroll to bottom helper
+  const scrollToBottom = useCallback((behavior = 'smooth') => {
+    if (messagesContainerRef.current) {
+      const scrollHeight = messagesContainerRef.current.scrollHeight;
+      messagesContainerRef.current.scrollTo({
+        top: scrollHeight,
+        behavior
+      });
+      isAtBottomRef.current = true;
+      setShowScrollBottomBtn(false);
+    } else if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior });
+      isAtBottomRef.current = true;
+      setShowScrollBottomBtn(false);
     }
-  }, [messages]);
+  }, []);
+
+  // Handle user scrolling
+  const handleScroll = useCallback(() => {
+    if (!messagesContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
+    
+    // We are at the bottom if we are within 50px of the bottom
+    const distanceToBottom = scrollHeight - scrollTop - clientHeight;
+    const atBottom = distanceToBottom < 50;
+    
+    isAtBottomRef.current = atBottom;
+    setShowScrollBottomBtn(!atBottom);
+  }, []);
+
+  // Scroll to bottom when messages change, but ONLY if user was already at the bottom
+  useEffect(() => {
+    if (isAtBottomRef.current) {
+      scrollToBottom('smooth');
+    }
+  }, [messages, scrollToBottom]);
 
   const handleSend = async (text, options = {}) => {
     if (!text.trim() || sending) return;
@@ -639,6 +763,7 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
     setStreaming(true);
     currentContentRef.current = '';
     reasoningBreakRef.current = true; // Reset for new message
+    setTimeout(() => scrollToBottom('smooth'), 50);
 
     try {
       if (window.akira?.sendMessage) {
@@ -745,26 +870,6 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
     }
   }, []);
 
-  // Start a new chat
-  const handleNewChat = async () => {
-    // Save current chat if it has messages
-    if (chatId && messages.length > 0 && window.akira?.saveChat) {
-      const userMessages = messages.filter(m => m.role !== 'system');
-      if (userMessages.length > 0) {
-        await window.akira.saveChat(chatId, messages);
-      }
-    }
-    setMessages([]);
-    setChatId(null);
-    setShowHistory(false);
-    setTodoList(null); // Clear todo list for new chat
-    // Auto-focus input for new chat
-    setTimeout(() => {
-      const textarea = document.querySelector('.chat-input__textarea');
-      if (textarea) textarea.focus();
-    }, 50);
-  };
-
   // Load chat history list
   const loadChatHistory = async () => {
     if (window.akira?.getChatHistory) {
@@ -852,6 +957,7 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
         setMessages(displayMessages);
         setChatId(historyChatId);
         setShowHistory(false);
+        setTimeout(() => scrollToBottom('auto'), 50);
       }
     }
   };
@@ -1034,8 +1140,9 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
                 onClick={handleNewChat}
                 title="New chat"
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M17 3a2.828 2.828 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
                 </svg>
               </button>
               {/* Copy Chat button */}
@@ -1182,26 +1289,43 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
         </div>
       ) : (
         <>
-          {/* Messages */}
-          <div className="widget__messages">
-            {messages.length === 0 ? (
-              <div className="widget__empty">
-                <p className="widget__empty-title">Hi, I'm Akira</p>
-                <p className="widget__empty-subtitle">Ask, Automate, Delegate</p>
-              </div>
-            ) : (
-              <>
-                <MessageList
-                  messages={messages}
-                  isStreaming={streaming}
-                  onRegenerate={handleRegenerate}
-                  onContinue={handleContinue}
-                  onEmergencyResponse={handleEmergencyResponse}
-                  onClarificationResponse={handleClarificationResponse}
-                  todoList={todoList}
-                />
-                <div ref={messagesEndRef} />
-              </>
+          {/* Messages Wrapper */}
+          <div className="widget__messages-wrapper">
+            <div
+              ref={messagesContainerRef}
+              className="widget__messages"
+              onScroll={handleScroll}
+            >
+              {messages.length === 0 ? (
+                <div className="widget__empty">
+                  <p className="widget__empty-title">Hi, I'm Akira</p>
+                  <p className="widget__empty-subtitle">Ask, Automate, Delegate</p>
+                </div>
+              ) : (
+                <>
+                  <MessageList
+                    messages={messages}
+                    isStreaming={streaming}
+                    onRegenerate={handleRegenerate}
+                    onContinue={handleContinue}
+                    onEmergencyResponse={handleEmergencyResponse}
+                    onClarificationResponse={handleClarificationResponse}
+                    todoList={todoList}
+                  />
+                  <div ref={messagesEndRef} />
+                </>
+              )}
+            </div>
+            {showScrollBottomBtn && (
+              <button
+                className="widget__scroll-bottom-btn"
+                onClick={() => scrollToBottom('smooth')}
+                title="Scroll to bottom"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+              </button>
             )}
           </div>
 
@@ -1212,11 +1336,12 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
               onStop={handleStop}
               disabled={sending}
               isStreaming={streaming}
-              liveMode={liveMode}
-              onLiveModeToggle={setLiveMode}
+              ttsEnabled={ttsEnabled}
+              onTtsToggle={setTtsEnabled}
               onFocus={() => setIsInputFocused(true)}
               onBlur={() => setIsInputFocused(false)}
               chatId={chatId}
+              settings={settings}
             />
           </div>
         </>

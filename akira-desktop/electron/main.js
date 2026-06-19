@@ -1,4 +1,5 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, globalShortcut, screen, nativeImage, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, globalShortcut, screen, nativeImage, clipboard, session } = require('electron');
+app.name = 'Akira';
 const path = require('path');
 const os = require('os');
 const Store = require('electron-store');
@@ -74,6 +75,7 @@ const store = new Store({
     reasoningEnabled: true,
     disabledTools: [], // Array of tool names to disable
     hideDesktopOverlay: false, // Hide overlay visual feedback (red border, blue overlay, etc.)
+    openAtLogin: true,
     // Provider settings
     selectedProvider: 'openrouter',
     selectedModel: 'openrouter/auto',
@@ -88,9 +90,17 @@ const store = new Store({
       awsRegion: 'us-east-1'
     },
     // Per-model settings (keyed by model ID)
-    modelSettings: {}
+    modelSettings: {},
+    // Custom window dimensions
+    compactWidth: 400,
+    compactHeight: 500,
+    sidebarWidth: 380,
+    windowWidth: 500,
+    windowHeight: 700
   }
 });
+
+
 
 let mainWindow = null;
 let tray = null;
@@ -126,17 +136,19 @@ const CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
 // Get position for a corner (compact mode)
 function getCornerPosition(corner) {
   const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
+  const width = store.get('compactWidth', COMPACT_WIDTH);
+  const height = store.get('compactHeight', COMPACT_HEIGHT);
 
   switch (corner) {
     case 'top-left':
       return { x: MARGIN, y: MARGIN };
     case 'top-right':
-      return { x: screenWidth - COMPACT_WIDTH - MARGIN, y: MARGIN };
+      return { x: screenWidth - width - MARGIN, y: MARGIN };
     case 'bottom-left':
-      return { x: MARGIN, y: screenHeight - COMPACT_HEIGHT - MARGIN };
+      return { x: MARGIN, y: screenHeight - height - MARGIN };
     case 'bottom-right':
     default:
-      return { x: screenWidth - COMPACT_WIDTH - MARGIN, y: screenHeight - COMPACT_HEIGHT - MARGIN };
+      return { x: screenWidth - width - MARGIN, y: screenHeight - height - MARGIN };
   }
 }
 
@@ -149,10 +161,11 @@ function getWindowConfig(mode) {
       const sidebarCorner = store.get('corner', 'right');
       // Normalize legacy corner values to left/right
       const sidebarPosition = (sidebarCorner === 'left' || sidebarCorner === 'top-left') ? 'left' : 'right';
+      const sidebarWidth = store.get('sidebarWidth', SIDEBAR_WIDTH);
       return {
-        width: SIDEBAR_WIDTH,
+        width: sidebarWidth,
         height: workArea.height,
-        x: sidebarPosition === 'left' ? workArea.x : workArea.x + workArea.width - SIDEBAR_WIDTH,
+        x: sidebarPosition === 'left' ? workArea.x : workArea.x + workArea.width - sidebarWidth,
         y: workArea.y,
         alwaysOnTop: true,
         skipTaskbar: true,
@@ -160,11 +173,13 @@ function getWindowConfig(mode) {
         transparent: true
       };
     case 'window':
+      const windowWidth = store.get('windowWidth', WINDOW_WIDTH);
+      const windowHeight = store.get('windowHeight', WINDOW_HEIGHT);
       return {
-        width: WINDOW_WIDTH,
-        height: WINDOW_HEIGHT,
-        x: Math.round((workArea.width - WINDOW_WIDTH) / 2) + workArea.x,
-        y: Math.round((workArea.height - WINDOW_HEIGHT) / 2) + workArea.y,
+        width: windowWidth,
+        height: windowHeight,
+        x: Math.round((workArea.width - windowWidth) / 2) + workArea.x,
+        y: Math.round((workArea.height - windowHeight) / 2) + workArea.y,
         alwaysOnTop: false,
         skipTaskbar: false,
         frame: false,
@@ -175,8 +190,8 @@ function getWindowConfig(mode) {
       const corner = store.get('corner', 'bottom-right');
       const pos = getCornerPosition(corner);
       return {
-        width: COMPACT_WIDTH,
-        height: COMPACT_HEIGHT,
+        width: store.get('compactWidth', COMPACT_WIDTH),
+        height: store.get('compactHeight', COMPACT_HEIGHT),
         x: pos.x,
         y: pos.y,
         alwaysOnTop: true,
@@ -196,8 +211,10 @@ function createWindow() {
     store.set('corner', 'bottom-right');
     currentCornerIndex = 3; // bottom-right index
     const workArea = screen.getPrimaryDisplay().workArea;
-    config.x = Math.round(workArea.x + workArea.width - COMPACT_WIDTH - MARGIN);
-    config.y = Math.round(workArea.y + workArea.height - COMPACT_HEIGHT - MARGIN);
+    const cWidth = store.get('compactWidth', COMPACT_WIDTH);
+    const cHeight = store.get('compactHeight', COMPACT_HEIGHT);
+    config.x = Math.round(workArea.x + workArea.width - cWidth - MARGIN);
+    config.y = Math.round(workArea.y + workArea.height - cHeight - MARGIN);
   }
 
   // Get platform-specific blur options
@@ -236,6 +253,10 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+
+  mainWindow.on('resize', () => {
+    saveWindowSize();
   });
 
   // Intercept close (X button) - hide to tray instead of destroying
@@ -344,7 +365,8 @@ function createTray() {
       if (widgetMode === 'sidebar') {
         // Sidebar mode: move to right side
         store.set('corner', 'right');
-        const x = workArea.x + workArea.width - SIDEBAR_WIDTH;
+        const sidebarWidth = store.get('sidebarWidth', SIDEBAR_WIDTH);
+        const x = workArea.x + workArea.width - sidebarWidth;
         mainWindow.setPosition(x, workArea.y, true);
       } else {
         // Compact mode: move to bottom-right corner
@@ -352,10 +374,13 @@ function createTray() {
         store.set('corner', corner);
         currentCornerIndex = CORNERS.indexOf(corner);
 
+        const compactWidth = store.get('compactWidth', COMPACT_WIDTH);
+        const compactHeight = store.get('compactHeight', COMPACT_HEIGHT);
+
         // If collapsed, restore to normal size first
         if (isWindowCollapsed) {
           const { x, y } = getCornerPosition(corner);
-          mainWindow.setSize(COMPACT_WIDTH, COMPACT_HEIGHT);
+          mainWindow.setSize(compactWidth, compactHeight);
           mainWindow.setPosition(x, y, true);
         } else {
           const { x, y } = getCornerPosition(corner);
@@ -400,23 +425,48 @@ function registerGlobalShortcut() {
 
 // App lifecycle
 app.whenReady().then(async () => {
-  const {fetchUrl} = require("./tools/web/web-search");
-  
-  
-  console.log('Calling search...')
-  try{
-    const searchUrl = `httpsapi.duckduckgo.com//?callback=%3C%3E&format=%3C%3E&no_html=%3C%3E&no_redirect=%3C%3E&q=%3C%3E&skip_disambig=%3C%3E`;
-    console.log({searchUrl})
-  
-    const response = await fetchUrl(searchUrl);
+  // Set permission handlers for microphone access
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    if (!webContents) return callback(false);
+    const url = webContents.getURL();
+    const isLocal = url.startsWith('http://localhost:') || url.startsWith('file://');
+    
+    if (isLocal && (permission === 'audioCapture' || permission === 'media')) {
+      callback(true);
+    } else {
+      callback(false);
+    }
+  });
 
-    console.log({response})
-  } catch(err){
-    console.log(err)
+  session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin) => {
+    const origin = requestingOrigin || (webContents && webContents.getURL()) || '';
+    const isLocal = origin.startsWith('http://localhost:') || origin.startsWith('file://');
+    
+    return isLocal && (permission === 'audioCapture' || permission === 'media');
+  });
+
+  // Request macOS microphone permission if applicable
+  if (process.platform === 'darwin') {
+    const { systemPreferences } = require('electron');
+    systemPreferences.askForMediaAccess('microphone').then(granted => {
+      console.log('Microphone access status on macOS:', granted);
+    }).catch(err => {
+      console.error('Failed to request macOS microphone access:', err);
+    });
   }
 
   // Load persistent chat history
   loadPersistentHistory();
+
+  // Configure start on startup settings
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: store.get('openAtLogin', true),
+      path: app.getPath('exe')
+    });
+  } catch (error) {
+    console.error('Failed to configure startup settings:', error);
+  }
 
   createWindow();
   createTray();
@@ -469,7 +519,9 @@ app.on('window-all-closed', () => {
 });
 
 app.on('will-quit', () => {
-  globalShortcut.unregisterAll();
+  if (app.isReady()) {
+    globalShortcut.unregisterAll();
+  }
   overlayManager.destroy();
   if (tray) {
     tray.destroy();
@@ -479,6 +531,7 @@ app.on('will-quit', () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  overlayManager.destroy();
   if (tray) {
     tray.destroy();
     tray = null;
@@ -520,6 +573,7 @@ ipcMain.handle('get-settings', () => {
     reasoningEnabled: store.get('reasoningEnabled', true),
     disabledTools: store.get('disabledTools', []),
     hideDesktopOverlay: store.get('hideDesktopOverlay', false),
+    openAtLogin: store.get('openAtLogin', true),
     // Provider settings
     selectedProvider: store.get('selectedProvider', 'openrouter'),
     selectedModel: store.get('selectedModel', 'openrouter/auto'),
@@ -540,6 +594,18 @@ ipcMain.handle('save-settings', (event, settings) => {
   // Notify overlay if hideDesktopOverlay changed
   if ('hideDesktopOverlay' in settings) {
     overlayManager.setOverlayHidden(settings.hideDesktopOverlay);
+  }
+
+  // Set startup status if openAtLogin changed
+  if ('openAtLogin' in settings) {
+    try {
+      app.setLoginItemSettings({
+        openAtLogin: settings.openAtLogin,
+        path: app.getPath('exe')
+      });
+    } catch (error) {
+      console.error('Failed to update startup settings:', error);
+    }
   }
 
   return true;
@@ -617,7 +683,8 @@ ipcMain.handle('switch-corner', (event, corner) => {
     // Sidebar mode: handle left/right positions
     if (mainWindow) {
       const workArea = screen.getPrimaryDisplay().workArea;
-      const x = corner === 'left' ? workArea.x : workArea.x + workArea.width - SIDEBAR_WIDTH;
+      const sidebarWidth = store.get('sidebarWidth', SIDEBAR_WIDTH);
+      const x = corner === 'left' ? workArea.x : workArea.x + workArea.width - sidebarWidth;
       mainWindow.setPosition(x, workArea.y, true);
     }
   } else {
@@ -643,7 +710,8 @@ ipcMain.handle('auto-relocate', () => {
     store.set('corner', nextCorner);
     if (mainWindow) {
       const workArea = screen.getPrimaryDisplay().workArea;
-      const x = nextCorner === 'left' ? workArea.x : workArea.x + workArea.width - SIDEBAR_WIDTH;
+      const sidebarWidth = store.get('sidebarWidth', SIDEBAR_WIDTH);
+      const x = nextCorner === 'left' ? workArea.x : workArea.x + workArea.width - sidebarWidth;
       mainWindow.setPosition(x, workArea.y, true);
     }
     return nextCorner;
@@ -851,6 +919,32 @@ function getExpandedPosition(ballBounds, windowWidth, windowHeight, workArea) {
   return { x: Math.round(x), y: Math.round(y) };
 }
 
+// Save current window size to store
+function saveWindowSize() {
+  if (!mainWindow || isWindowCollapsed || animationInProgress) return;
+  if (mainWindow.isMaximized() || mainWindow.isFullScreen() || mainWindow.isMinimized()) return;
+
+  const widgetMode = store.get('widgetMode', 'compact');
+  const { width, height } = mainWindow.getBounds();
+
+  // Validate that bounds are reasonable (not collapsed size or 0)
+  if (width <= COLLAPSED_WIDTH || height <= COLLAPSED_HEIGHT) return;
+
+  switch (widgetMode) {
+    case 'compact':
+      store.set('compactWidth', width);
+      store.set('compactHeight', height);
+      break;
+    case 'sidebar':
+      store.set('sidebarWidth', width);
+      break;
+    case 'window':
+      store.set('windowWidth', width);
+      store.set('windowHeight', height);
+      break;
+  }
+}
+
 // Set collapsed state (used by IPC and shortcut)
 async function setCollapsedState(collapsed) {
   if (!mainWindow) return false;
@@ -934,7 +1028,8 @@ ipcMain.handle('move-window-direction', (event, direction) => {
       mainWindow.setPosition(workArea.x, workArea.y, true);
     } else if (direction === 'right') {
       store.set('corner', 'right');
-      mainWindow.setPosition(workArea.x + workArea.width - SIDEBAR_WIDTH, workArea.y, true);
+      const sidebarWidth = store.get('sidebarWidth', SIDEBAR_WIDTH);
+      mainWindow.setPosition(workArea.x + workArea.width - sidebarWidth, workArea.y, true);
     }
     return store.get('corner');
   }
@@ -1705,6 +1800,16 @@ ipcMain.handle('reset-akira', async () => {
     store.clear();
     store.set('apiKey', apiKey);
 
+    // Also reset startup settings to default (true)
+    try {
+      app.setLoginItemSettings({
+        openAtLogin: true,
+        path: app.getPath('exe')
+      });
+    } catch (error) {
+      console.error('Failed to reset startup settings:', error);
+    }
+
     // Reload the app
     if (mainWindow) {
       mainWindow.reload();
@@ -1714,6 +1819,62 @@ ipcMain.handle('reset-akira', async () => {
   } catch (error) {
     console.error('Error resetting Akira:', error);
     return false;
+  }
+});
+
+// ============ Agent Prompts IPC Handlers ============
+
+// Get all agent prompts for settings
+ipcMain.handle('get-agent-prompts', () => {
+  try {
+    const { getPrompt } = require('./agents/prompt-manager');
+    const { getAvailableAgents, initializeAgents, isInitialized } = require('./agents/init');
+    
+    if (!isInitialized()) {
+      const providerKeys = store.get('providerApiKeys', {});
+      const apiKey = store.get('apiKey', '');
+      const selectedProvider = store.get('selectedProvider', 'openrouter');
+      initializeAgents({
+        apiKey: providerKeys[selectedProvider] || apiKey,
+        provider: selectedProvider,
+        model: store.get('selectedModel')
+      });
+    }
+
+    const agentsList = getAvailableAgents();
+    
+    return agentsList.map(agent => ({
+      name: agent.name,
+      displayName: agent.displayName,
+      description: agent.description,
+      systemPrompt: getPrompt(agent.name)
+    }));
+  } catch (error) {
+    console.error('Error getting agent prompts:', error);
+    return [];
+  }
+});
+
+// Update agent prompt
+ipcMain.handle('update-agent-prompt', (event, { agentName, promptText }) => {
+  try {
+    const { updatePrompt } = require('./agents/prompt-manager');
+    updatePrompt(agentName, promptText);
+    return true;
+  } catch (error) {
+    console.error(`Error updating agent prompt for ${agentName}:`, error);
+    return false;
+  }
+});
+
+// Reset agent prompt to default
+ipcMain.handle('reset-agent-prompt', (event, agentName) => {
+  try {
+    const { resetPrompt } = require('./agents/prompt-manager');
+    return resetPrompt(agentName);
+  } catch (error) {
+    console.error(`Error resetting agent prompt for ${agentName}:`, error);
+    return '';
   }
 });
 

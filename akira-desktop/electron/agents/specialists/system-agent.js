@@ -4,7 +4,7 @@
  */
 
 const { BaseAgent } = require('../base-agent');
-const getSystemAgentPrompt = require('../prompts/system-agent');
+const { getPrompt } = require('../prompt-manager');
 
 // Import system tools
 const executeCommand = require('../../tools/system/execute-command');
@@ -33,7 +33,7 @@ function createSystemAgent(communicationTools = { definitions: [], handlers: {} 
     name: 'vektor',
     displayName: 'Vektor',
     description: 'Execute shell commands and system operations',
-    systemPrompt: getSystemAgentPrompt(),
+    systemPrompt: getPrompt('vektor'),
     toolDefinitions,
     toolHandlers
   });

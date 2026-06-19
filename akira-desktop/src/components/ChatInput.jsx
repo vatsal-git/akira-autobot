@@ -4,14 +4,10 @@ import '../styles/chat-input.css';
 // Regex to match @path patterns (paths starting with @ followed by drive letter or /)
 const FILE_PATH_REGEX = /@([A-Za-z]:[^\s\n]+|\/[^\s\n]+)/g;
 
-function ChatInput({ onSend, onStop, disabled, isStreaming, liveMode, onLiveModeToggle, onFocus, onBlur, chatId }) {
+function ChatInput({ onSend, onStop, disabled, isStreaming, ttsEnabled, onTtsToggle, onFocus, onBlur, chatId, settings }) {
   const [text, setText] = useState('');
-  const [isListening, setIsListening] = useState(false);
   const textareaRef = useRef(null);
-  const recognitionRef = useRef(null);
   const saveTimeoutRef = useRef(null);
-  const isListeningRef = useRef(false);
-  const liveModeRef = useRef(false);
 
   // Load draft text on mount, reset when chatId changes
   useEffect(() => {
@@ -51,89 +47,6 @@ function ChatInput({ onSend, onStop, disabled, isStreaming, liveMode, onLiveMode
       }
     };
   }, []);
-
-  // Keep refs in sync with state
-  useEffect(() => {
-    isListeningRef.current = isListening;
-  }, [isListening]);
-
-  useEffect(() => {
-    liveModeRef.current = liveMode;
-  }, [liveMode]);
-
-  // Initialize speech recognition (once on mount)
-  useEffect(() => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = 'en-US';
-
-      recognition.onresult = (event) => {
-        let finalTranscript = '';
-        let interimTranscript = '';
-
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalTranscript += transcript;
-          } else {
-            interimTranscript += transcript;
-          }
-        }
-
-        if (finalTranscript) {
-          setText(prev => {
-            const newText = prev + finalTranscript;
-            saveDraft(newText);
-            return newText;
-          });
-        }
-      };
-
-      recognition.onerror = (event) => {
-        console.error('Speech recognition error:', event.error);
-        setIsListening(false);
-      };
-
-      recognition.onend = () => {
-        // Use refs to get current values (avoiding stale closure)
-        if (liveModeRef.current && isListeningRef.current) {
-          try {
-            recognition.start();
-          } catch (e) {
-            // Already started
-          }
-        } else {
-          setIsListening(false);
-        }
-      };
-
-      recognitionRef.current = recognition;
-    }
-
-    return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
-    };
-  }, [saveDraft]);
-
-  // Start/stop listening when live mode changes
-  useEffect(() => {
-    if (liveMode && !isListening && recognitionRef.current) {
-      try {
-        recognitionRef.current.start();
-        setIsListening(true);
-      } catch (e) {
-        console.error('Failed to start speech recognition:', e);
-      }
-    } else if (!liveMode && isListening && recognitionRef.current) {
-      recognitionRef.current.stop();
-      setIsListening(false);
-    }
-  }, [liveMode]);
 
   // Auto-focus on mount
   useEffect(() => {
@@ -175,9 +88,9 @@ function ChatInput({ onSend, onStop, disabled, isStreaming, liveMode, onLiveMode
     }
   };
 
-  const handleLiveModeClick = () => {
-    if (onLiveModeToggle) {
-      onLiveModeToggle(!liveMode);
+  const handleTtsToggleClick = () => {
+    if (onTtsToggle) {
+      onTtsToggle(!ttsEnabled);
     }
   };
 
@@ -265,27 +178,27 @@ function ChatInput({ onSend, onStop, disabled, isStreaming, liveMode, onLiveMode
           onPaste={handlePaste}
           onFocus={onFocus}
           onBlur={onBlur}
-          placeholder={liveMode ? "Listening... or type here" : "Type here..."}
+          placeholder="Type here..."
           disabled={disabled}
           rows={1}
         />
         <button
           type="button"
-          className={`chat-input__live ${liveMode ? 'chat-input__live--active' : ''}`}
-          onClick={handleLiveModeClick}
-          title={liveMode ? "Turn off Live Mode" : "Turn on Live Mode (Voice)"}
+          className={`chat-input__tts ${ttsEnabled ? 'chat-input__tts--active' : ''}`}
+          onClick={handleTtsToggleClick}
+          title={ttsEnabled ? "Turn off Text to Speech" : "Turn on Text to Speech"}
         >
-          {liveMode ? (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
-              <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
+          {ttsEnabled ? (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+              <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
             </svg>
           ) : (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
-              <path d="M19 10v2a7 7 0 01-14 0v-2" />
-              <line x1="12" y1="19" x2="12" y2="23" />
-              <line x1="8" y1="23" x2="16" y2="23" />
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+              <line x1="23" y1="9" x2="17" y2="15" />
+              <line x1="17" y1="9" x2="23" y2="15" />
             </svg>
           )}
         </button>

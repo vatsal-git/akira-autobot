@@ -85,7 +85,10 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
   const [models, setModels] = useState([]);
   const [apiKey, setApiKey] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
-  const [internalView, setInternalView] = useState('general'); // 'general' or 'model'
+  const [internalView, setInternalView] = useState('general'); // 'general', 'model', or 'agents'
+  const [agentPrompts, setAgentPrompts] = useState([]);
+  const [expandedAgent, setExpandedAgent] = useState(null);
+  const debounceTimers = useRef({});
 
   // Provider state
   const [providers, setProviders] = useState([]);
@@ -112,10 +115,81 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
     loadProviders();
   }, []);
 
+  useEffect(() => {
+    if (currentView === 'agents') {
+      loadAgentPrompts();
+    }
+  }, [currentView]);
+
+  useEffect(() => {
+    return () => {
+      // Clean up timers on unmount
+      Object.values(debounceTimers.current).forEach(clearTimeout);
+    };
+  }, []);
+
+  const loadAgentPrompts = async () => {
+    try {
+      const prompts = await window.akira.getAgentPrompts();
+      setAgentPrompts(prompts || []);
+    } catch (error) {
+      console.error('Error loading agent prompts:', error);
+    }
+  };
+
+  const handlePromptChange = (agentName, newText) => {
+    // Update local state immediately for responsive typing
+    setAgentPrompts(prev => prev.map(agent => {
+      if (agent.name === agentName) {
+        return { ...agent, systemPrompt: newText };
+      }
+      return agent;
+    }));
+
+    // Debounce backend save
+    if (debounceTimers.current[agentName]) {
+      clearTimeout(debounceTimers.current[agentName]);
+    }
+
+    debounceTimers.current[agentName] = setTimeout(async () => {
+      try {
+        await window.akira.updateAgentPrompt(agentName, newText);
+      } catch (error) {
+        console.error(`Error saving agent prompt for ${agentName}:`, error);
+      }
+    }, 800);
+  };
+
+  const handleResetPrompt = async (agentName) => {
+    if (debounceTimers.current[agentName]) {
+      clearTimeout(debounceTimers.current[agentName]);
+    }
+
+    const confirmed = window.confirm(`Are you sure you want to reset the system prompt for ${agentName} to default?`);
+    if (!confirmed) return;
+
+    try {
+      const defaultPrompt = await window.akira.resetAgentPrompt(agentName);
+      setAgentPrompts(prev => prev.map(agent => {
+        if (agent.name === agentName) {
+          return { ...agent, systemPrompt: defaultPrompt };
+        }
+        return agent;
+      }));
+    } catch (error) {
+      console.error(`Error resetting agent prompt for ${agentName}:`, error);
+    }
+  };
+
+  const toggleAgentExpanded = (agentName) => {
+    setExpandedAgent(prev => prev === agentName ? null : agentName);
+  };
+
   // Sync settings prop to localSettings when it changes
   useEffect(() => {
     if (settings) {
       setLocalSettings(settings);
+
     }
   }, [settings]);
 
@@ -264,26 +338,42 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
 
   const generalSettingsContent = (
     <div className="settings-panel__content">
-      {/* Theme & Model Settings - two in a row */}
+      {/* Theme Setting */}
+      <div className="settings-panel__section">
+        <h3 className="settings-panel__section-title">Theme</h3>
+        <Dropdown
+          value={localSettings.theme || 'system'}
+          onChange={(val) => updateSetting('theme', val)}
+          options={[
+            { value: 'system', label: 'System' },
+            { value: 'light', label: 'Light' },
+            { value: 'dark', label: 'Dark' },
+          ]}
+        />
+      </div>
+
+      {/* Model & Agents Settings - two in a row */}
       <div className="settings-panel__row settings-panel__row--2">
         <div className="settings-panel__section">
-          <h3 className="settings-panel__section-title">Theme</h3>
-          <Dropdown
-            value={localSettings.theme || 'system'}
-            onChange={(val) => updateSetting('theme', val)}
-            options={[
-              { value: 'system', label: 'System' },
-              { value: 'light', label: 'Light' },
-              { value: 'dark', label: 'Dark' },
-            ]}
-          />
+          <h3 className="settings-panel__section-title">Model Settings</h3>
+          <button
+            type="button"
+            className="settings-panel__nav-btn settings-panel__nav-btn--compact"
+            onClick={() => setCurrentView('model')}
+          >
+            <span>Configure</span>
+            <svg className="settings-panel__nav-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          </button>
         </div>
 
         <div className="settings-panel__section">
-          <h3 className="settings-panel__section-title">Model</h3>
+          <h3 className="settings-panel__section-title">Agents Settings</h3>
           <button
+            type="button"
             className="settings-panel__nav-btn settings-panel__nav-btn--compact"
-            onClick={() => setCurrentView('model')}
+            onClick={() => setCurrentView('agents')}
           >
             <span>Configure</span>
             <svg className="settings-panel__nav-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -336,6 +426,8 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
         </p>
       </div>
 
+
+
       {/* Hide Desktop Overlay Toggle */}
       <div className="settings-panel__section">
         <div className="settings-panel__toggle-row">
@@ -348,6 +440,24 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
             onClick={() => updateSetting('hideDesktopOverlay', !localSettings.hideDesktopOverlay)}
             role="switch"
             aria-checked={localSettings.hideDesktopOverlay}
+          >
+            <span className="settings-panel__toggle-slider" />
+          </button>
+        </div>
+      </div>
+
+      {/* Start on Startup Toggle */}
+      <div className="settings-panel__section">
+        <div className="settings-panel__toggle-row">
+          <div className="settings-panel__toggle-info">
+            <h3 className="settings-panel__section-title">Start on Startup</h3>
+            <p className="settings-panel__hint settings-panel__hint--inline">Launch Akira automatically when your system starts</p>
+          </div>
+          <button
+            className={`settings-panel__toggle ${(localSettings.openAtLogin ?? true) ? 'settings-panel__toggle--active' : ''}`}
+            onClick={() => updateSetting('openAtLogin', !(localSettings.openAtLogin ?? true))}
+            role="switch"
+            aria-checked={localSettings.openAtLogin ?? true}
           >
             <span className="settings-panel__toggle-slider" />
           </button>
@@ -596,7 +706,70 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
     </div>
   );
 
-  const content = currentView === 'model' ? modelSettingsContent : generalSettingsContent;
+  const agentSettingsContent = (
+    <div className="settings-panel__content">
+      <div className="settings-panel__agents-list">
+        {agentPrompts.map((agent) => (
+          <div
+            key={agent.name}
+            className={`settings-panel__agent-item ${expandedAgent === agent.name ? 'settings-panel__agent-item--expanded' : ''}`}
+          >
+            <button
+              type="button"
+              className="settings-panel__agent-header"
+              onClick={() => toggleAgentExpanded(agent.name)}
+            >
+              <div className="settings-panel__agent-info-left">
+                <span className="settings-panel__agent-name">{agent.displayName}</span>
+                <span className="settings-panel__agent-desc">{agent.description}</span>
+              </div>
+              <svg
+                className="settings-panel__agent-chevron"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M9 18l6-6-6-6" />
+              </svg>
+            </button>
+            
+            {expandedAgent === agent.name && (
+              <div className="settings-panel__agent-body">
+                <div className="settings-panel__agent-body-header">
+                  <span className="settings-panel__section-title">System Prompt</span>
+                  <button
+                    type="button"
+                    className="settings-panel__agent-reset-btn"
+                    onClick={() => handleResetPrompt(agent.name)}
+                  >
+                    Reset to Default
+                  </button>
+                </div>
+                <textarea
+                  className="settings-panel__agent-textarea"
+                  value={agent.systemPrompt || ''}
+                  onChange={(e) => handlePromptChange(agent.name, e.target.value)}
+                  placeholder="Enter system prompt here..."
+                />
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  let content;
+  if (currentView === 'model') {
+    content = modelSettingsContent;
+  } else if (currentView === 'agents') {
+    content = agentSettingsContent;
+  } else {
+    content = generalSettingsContent;
+  }
 
   // Inline mode: render content directly without overlay
   if (inline) {
@@ -618,15 +791,18 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
         onClick={(e) => e.stopPropagation()}
       >
         <div className="settings-panel__header">
-          {currentView === 'model' ? (
-            <button className="settings-panel__header-back" onClick={() => setCurrentView('general')}>
+          {currentView === 'model' || currentView === 'agents' ? (
+            <button type="button" className="settings-panel__header-back" onClick={() => setCurrentView('general')}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M15 18l-6-6 6-6" />
               </svg>
             </button>
           ) : null}
-          <h2 className="settings-panel__title">{currentView === 'model' ? 'Model Settings' : 'Settings'}</h2>
-          <button className="settings-panel__close" onClick={onClose}>
+          <h2 className="settings-panel__title">
+            {currentView === 'model' ? 'Model Settings' :
+             currentView === 'agents' ? 'Agents Settings' : 'Settings'}
+          </h2>
+          <button type="button" className="settings-panel__close" onClick={onClose}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M18 6L6 18M6 6l12 12" />
             </svg>

@@ -47,7 +47,7 @@ The todo list appears as an interactive checklist in the UI.`,
                 },
                 agent: {
                   type: 'string',
-                  description: 'Optional: which agent will handle this (dobby, vektor, samba, smriti, beneges)'
+                  description: 'Optional: which agent will handle this (dobby, vektor, samba, beneges)'
                 }
               },
               required: ['content']

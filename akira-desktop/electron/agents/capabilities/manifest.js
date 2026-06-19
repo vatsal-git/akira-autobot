@@ -56,7 +56,7 @@ const AGENT_CAPABILITIES = {
       'Running code or scripts (use Vektor)',
       'Downloading files from web (use Samba)',
       'UI automation or screenshots (use BeneGes)',
-      'Storing memories (use Smriti)'
+      'Storing memories (handled by Akira)'
     ],
 
     exampleTasks: [
@@ -173,7 +173,7 @@ const AGENT_CAPABILITIES = {
       'Reading file contents (use Dobby)',
       'Web searches (use Samba)',
       'GUI automation (use BeneGes)',
-      'Long-term storage (use Smriti)'
+      'Long-term storage (handled by Akira)'
     ],
 
     exampleTasks: [
@@ -243,7 +243,7 @@ const AGENT_CAPABILITIES = {
       'File operations (use Dobby)',
       'Web scraping (use Samba for content)',
       'Running CLI commands (use Vektor)',
-      'Storing automation steps (use Smriti)'
+      'Storing automation steps (handled by Akira)'
     ],
 
     exampleTasks: [
@@ -253,63 +253,6 @@ const AGENT_CAPABILITIES = {
       'Find and click the Submit button'
     ]
   },
-
-  smriti: {
-    name: 'smriti',
-    displayName: 'Smriti',
-    summary: 'Long-term memory: store, search, and recall information',
-
-    capabilities: [
-      {
-        action: 'store',
-        description: 'Save information for future recall',
-        supports: ['text content', 'structured data', 'categorization'],
-        limitations: ['No binary data', 'Size limits per memory']
-      },
-      {
-        action: 'search',
-        description: 'Search stored memories by content or category',
-        supports: ['keyword search', 'category filtering', 'fuzzy matching'],
-        limitations: ['Search quality depends on how memory was stored']
-      },
-      {
-        action: 'list',
-        description: 'List all stored memories',
-        supports: ['all memories', 'by category'],
-        limitations: ['May be slow with many memories']
-      }
-    ],
-
-    cannotDo: [
-      'Store sensitive information (passwords, API keys)',
-      'Store binary data or files',
-      'Access external databases',
-      'Sync with cloud services',
-      'Share memories across users'
-    ],
-
-    bestFor: [
-      'Remembering user preferences',
-      'Storing project context',
-      'Keeping track of important facts',
-      'Recalling previous decisions',
-      'Maintaining conversation context'
-    ],
-
-    notFor: [
-      'File storage (use Dobby)',
-      'Current web information (use Samba)',
-      'System state (use Vektor)',
-      'Temporary data (keep in conversation)'
-    ],
-
-    exampleTasks: [
-      'Remember that the user prefers dark mode',
-      'Store this project configuration',
-      'Search for memories about API endpoints',
-      'List all memories about user preferences'
-    ]
-  }
 };
 
 /**

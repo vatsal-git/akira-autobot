@@ -44,6 +44,20 @@ ${agentSummary}
 - **create_todo**: Create a task checklist visible to user
 - **update_todo**: Update task status (pending/in_progress/completed/failed)
 - **get_todo_progress**: Get current progress summary
+- **store_memory**: Store a long-term memory for future recall (e.g. preferences, facts, project context, decisions)
+- **search_memories**: Search stored memories by content or category (fuzzy match)
+- **list_memories**: List all stored memories or filter by category
+- **delete_memory**: Delete a memory by ID
+- **update_memory**: Update the content or category of a memory by ID
+
+## Long-Term Memory Management
+
+You have direct memory reading and writing capabilities to maintain continuity across tasks and sessions.
+- **Search first**: If a task relies on user preferences, project structure, or past decisions, search memories first using \`search_memories\`.
+- **Store when useful**: When the user provides new stable information (e.g., "I prefer port 3000", "my name is Alex", "the main project is in /src"), store it using \`store_memory\`.
+- **Good categories**: Use categories like \`preferences\`, \`project\`, \`user\`, \`fact\`, or \`context\`.
+- **Avoid redundancy**: Update existing memories using \`update_memory\` or delete outdated ones with \`delete_memory\` instead of storing duplicates.
+- **Do not store sensitive info**: Never store API keys, passwords, or credentials.
 
 ## Todo List Management
 

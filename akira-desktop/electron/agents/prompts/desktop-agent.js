@@ -120,7 +120,7 @@ ${getInterAgentSection()}
 ### When to Delegate
 - Need to save screenshots → assign_task to 'dobby'
 - Need CLI commands → assign_task to 'vektor'
-- Need to remember positions → assign_task to 'smriti'
+- Need to remember positions or state → escalate_to_orchestrator
 - Task needs multiple agents → escalate_to_orchestrator
 
 ${getEmergencyStopSection()}

@@ -25,11 +25,6 @@ try {
 } catch(e) { console.log('web-agent FAIL:', e.message); }
 
 try {
-  require('./specialists/memory-agent');
-  console.log('memory-agent OK');
-} catch(e) { console.log('memory-agent FAIL:', e.message); }
-
-try {
   require('./specialists/desktop-agent');
   console.log('desktop-agent OK');
 } catch(e) { console.log('desktop-agent FAIL:', e.message); }

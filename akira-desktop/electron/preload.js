@@ -115,5 +115,10 @@ contextBridge.exposeInMainWorld('akira', {
   },
 
   // Reset Akira
-  resetAkira: () => ipcRenderer.invoke('reset-akira')
+  resetAkira: () => ipcRenderer.invoke('reset-akira'),
+
+  // Agent prompts customization
+  getAgentPrompts: () => ipcRenderer.invoke('get-agent-prompts'),
+  updateAgentPrompt: (agentName, promptText) => ipcRenderer.invoke('update-agent-prompt', { agentName, promptText }),
+  resetAgentPrompt: (agentName) => ipcRenderer.invoke('reset-agent-prompt', agentName)
 });

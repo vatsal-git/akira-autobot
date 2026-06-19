@@ -27,10 +27,6 @@ try {
   const webAgent = createWebAgent();
   console.log(`✓ Web Agent: ${webAgent.toolDefinitions.length} tools - [${webAgent.toolDefinitions.map(t => t.name).join(', ')}]`);
 
-  const { createMemoryAgent } = require('./specialists/memory-agent');
-  const memoryAgent = createMemoryAgent();
-  console.log(`✓ Memory Agent: ${memoryAgent.toolDefinitions.length} tools - [${memoryAgent.toolDefinitions.map(t => t.name).join(', ')}]`);
-
   const { createDesktopAgent } = require('./specialists/desktop-agent');
   const desktopAgent = createDesktopAgent();
   console.log(`✓ Desktop Agent: ${desktopAgent.toolDefinitions.length} tools - [${desktopAgent.toolDefinitions.map(t => t.name).join(', ')}]`);

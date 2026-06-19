@@ -23,6 +23,37 @@ function loadBedrockSdk() {
 }
 
 /**
+ * Format raw error text from API into a cleaner, human-readable error message
+ */
+function formatApiError(errorText, providerName) {
+  let errorMessage = errorText;
+  try {
+    const parsed = JSON.parse(errorText);
+    if (parsed) {
+      if (parsed.error && typeof parsed.error.message === 'string') {
+        errorMessage = parsed.error.message;
+      } else if (typeof parsed.message === 'string') {
+        errorMessage = parsed.message;
+      } else if (parsed.error && typeof parsed.error === 'string') {
+        errorMessage = parsed.error;
+      }
+    }
+  } catch (e) {
+    // If not JSON, check if it's an HTML page (e.g. gateway error/Cloudflare protection)
+    if (errorText.includes('<html') || errorText.includes('<!DOCTYPE html')) {
+      errorMessage = 'Server returned HTML response (e.g. gateway error/Cloudflare protection)';
+    }
+  }
+
+  // Truncate if still excessively long
+  if (errorMessage.length > 500) {
+    errorMessage = errorMessage.substring(0, 500) + '...';
+  }
+
+  return `${providerName} API error: ${errorMessage}`;
+}
+
+/**
  * Call an LLM provider
  * @param {Object} params
  * @param {string} params.providerId - Provider ID (e.g., 'openrouter', 'anthropic', 'bedrock')
@@ -89,7 +120,7 @@ async function callProvider({
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`${provider.name} API error: ${errorText}`);
+    throw new Error(formatApiError(errorText, provider.name));
   }
 
   // Process streaming response
@@ -318,6 +349,9 @@ async function processOpenAIStream(response, onEvent) {
         const jsonStr = trimmed.slice(6);
         try {
           const chunk = JSON.parse(jsonStr);
+          if (chunk.error) {
+            throw new Error(`OpenAI stream error: ${chunk.error.message || JSON.stringify(chunk.error)}`);
+          }
           const delta = chunk.choices?.[0]?.delta;
 
           if (delta) {
@@ -362,6 +396,9 @@ async function processOpenAIStream(response, onEvent) {
             }
           }
         } catch (parseErr) {
+          if (parseErr.message?.startsWith('OpenAI stream error')) {
+            throw parseErr;
+          }
           // Skip malformed chunks
         }
       }

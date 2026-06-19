@@ -4,7 +4,7 @@
  */
 
 const { BaseAgent } = require('../base-agent');
-const getDesktopAgentPrompt = require('../prompts/desktop-agent');
+const { getPrompt } = require('../prompt-manager');
 
 // Import desktop automation tools
 const desktopMouse = require('../../tools/desktop-automation/desktop-mouse');
@@ -89,7 +89,7 @@ function createDesktopAgent(communicationTools = { definitions: [], handlers: {}
     name: 'beneges',
     displayName: 'BeneGes',
     description: 'Desktop automation: mouse, keyboard, screenshots, and UI interaction',
-    systemPrompt: getDesktopAgentPrompt(),
+    systemPrompt: getPrompt('beneges'),
     toolDefinitions,
     toolHandlers
   });

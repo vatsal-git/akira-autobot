@@ -24,10 +24,16 @@ const {
 const { createFileAgent, setWorkspaceRoot: setFileWorkspace } = require('./specialists/file-agent');
 const { createSystemAgent } = require('./specialists/system-agent');
 const { createWebAgent } = require('./specialists/web-agent');
-const { createMemoryAgent } = require('./specialists/memory-agent');
 const { createDesktopAgent } = require('./specialists/desktop-agent');
 const { createOrchestratorAgent } = require('./orchestrator');
 const { createTodoTools } = require('./todo-tools');
+
+// Import memory tools
+const storeMemory = require('../tools/memory/store-memory');
+const searchMemories = require('../tools/memory/search-memories');
+const listMemories = require('../tools/memory/list-memories');
+const deleteMemory = require('../tools/memory/delete-memory');
+const updateMemory = require('../tools/memory/update-memory');
 
 let initialized = false;
 let currentApiConfig = null;
@@ -53,13 +59,11 @@ function initializeAgents(apiConfig) {
   const fileAgent = createFileAgent();
   const systemAgent = createSystemAgent();
   const webAgent = createWebAgent();
-  const memoryAgent = createMemoryAgent();
   const desktopAgent = createDesktopAgent();
 
   registerAgent(fileAgent);
   registerAgent(systemAgent);
   registerAgent(webAgent);
-  registerAgent(memoryAgent);
   registerAgent(desktopAgent);
 
   // Create orchestrator with delegate tool
@@ -88,16 +92,32 @@ function createExecutionContext({ apiConfig, onEvent, signal }) {
   // Create todo tools for orchestrator
   const todoTools = createTodoTools(onEvent);
 
-  // Get orchestrator and update its tools (merge delegate + todo tools)
+  // Get orchestrator and update its tools (merge memory + delegate + todo tools)
   const orchestrator = getAgent('akira');
   if (orchestrator) {
-    orchestrator.toolDefinitions = [...delegateTool.definitions, ...todoTools.definitions];
-    orchestrator.toolHandlers = { ...delegateTool.handlers, ...todoTools.handlers };
+    orchestrator.toolDefinitions = [
+      ...storeMemory.definitions,
+      ...searchMemories.definitions,
+      ...listMemories.definitions,
+      ...deleteMemory.definitions,
+      ...updateMemory.definitions,
+      ...delegateTool.definitions,
+      ...todoTools.definitions
+    ];
+    orchestrator.toolHandlers = {
+      ...storeMemory.handlers,
+      ...searchMemories.handlers,
+      ...listMemories.handlers,
+      ...deleteMemory.handlers,
+      ...updateMemory.handlers,
+      ...delegateTool.handlers,
+      ...todoTools.handlers
+    };
     console.log('[agents] Orchestrator tools:', orchestrator.toolDefinitions.map(t => t.name));
   }
 
   // Update specialist agents with communication tools
-  const specialists = ['dobby', 'vektor', 'samba', 'smriti', 'beneges'];
+  const specialists = ['dobby', 'vektor', 'samba', 'beneges'];
   for (const name of specialists) {
     const agent = getAgent(name);
     if (agent) {

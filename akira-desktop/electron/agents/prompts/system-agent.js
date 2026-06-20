@@ -6,7 +6,8 @@ const {
   getStructuredTaskSection,
   getInterAgentSection,
   getEmergencyStopSection,
-  getClarificationSection
+  getClarificationSection,
+  getMemoryInstructionSection
 } = require('./shared');
 
 module.exports = function getSystemAgentPrompt() {
@@ -98,6 +99,8 @@ You are specialized in executing system commands and shell operations.
 ${getStructuredTaskSection()}
 
 ${getInterAgentSection()}
+
+${getMemoryInstructionSection()}
 
 ### When to Delegate
 - Need to read file contents → assign_task to 'dobby'

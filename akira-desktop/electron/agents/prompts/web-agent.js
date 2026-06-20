@@ -6,7 +6,8 @@ const {
   getStructuredTaskSection,
   getInterAgentSection,
   getEmergencyStopSection,
-  getClarificationSection
+  getClarificationSection,
+  getMemoryInstructionSection
 } = require('./shared');
 
 module.exports = function getWebAgentPrompt() {
@@ -74,6 +75,8 @@ await_tasks({task_ids: ["task_1", "task_2"]})
 ${getStructuredTaskSection()}
 
 ${getInterAgentSection()}
+
+${getMemoryInstructionSection()}
 
 ### When to Delegate
 - Need to save content to file → assign_task to 'dobby'

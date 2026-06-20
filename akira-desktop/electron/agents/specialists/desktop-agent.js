@@ -13,6 +13,10 @@ const desktopScreenQuery = require('../../tools/desktop-automation/desktop-scree
 const desktopWait = require('../../tools/desktop-automation/desktop-wait');
 const desktopDiagnose = require('../../tools/desktop-automation/desktop-diagnose');
 
+// Import memory tools
+const storeMemory = require('../../tools/memory/store-memory');
+const searchMemories = require('../../tools/memory/search-memories');
+
 // Import optional tools with error handling
 let desktopSmartClick = { definitions: [], handlers: {} };
 let desktopAnalyzeImage = { definitions: [], handlers: {} };
@@ -56,7 +60,7 @@ try {
  * @returns {BaseAgent}
  */
 function createDesktopAgent(communicationTools = { definitions: [], handlers: {} }) {
-  // Combine all desktop tools with communication tools
+  // Combine all desktop tools with communication tools and memory tools
   const toolDefinitions = [
     ...desktopMouse.definitions,
     ...desktopKeyboard.definitions,
@@ -68,6 +72,8 @@ function createDesktopAgent(communicationTools = { definitions: [], handlers: {}
     ...windowsUiaTools.definitions,
     ...cameraTools.definitions,
     ...uiParseTools.definitions,
+    ...storeMemory.definitions,
+    ...searchMemories.definitions,
     ...communicationTools.definitions
   ];
 
@@ -82,6 +88,8 @@ function createDesktopAgent(communicationTools = { definitions: [], handlers: {}
     ...windowsUiaTools.handlers,
     ...cameraTools.handlers,
     ...uiParseTools.handlers,
+    ...storeMemory.handlers,
+    ...searchMemories.handlers,
     ...communicationTools.handlers
   };
 

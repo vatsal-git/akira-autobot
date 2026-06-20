@@ -6,7 +6,8 @@ const {
   getStructuredTaskSection,
   getInterAgentSection,
   getEmergencyStopSection,
-  getClarificationSection
+  getClarificationSection,
+  getMemoryInstructionSection
 } = require('./shared');
 
 module.exports = function getFileAgentPrompt() {
@@ -78,6 +79,8 @@ You are specialized in file system operations.
 ${getStructuredTaskSection()}
 
 ${getInterAgentSection()}
+
+${getMemoryInstructionSection()}
 
 ### When to Delegate
 - Need web content to save → assign_task to 'samba'

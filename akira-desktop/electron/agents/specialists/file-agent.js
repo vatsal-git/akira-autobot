@@ -12,18 +12,24 @@ const writeFile = require('../../tools/file-operations/write-file');
 const patchFile = require('../../tools/file-operations/patch-file');
 const listDir = require('../../tools/file-operations/list-dir');
 
+// Import memory tools
+const storeMemory = require('../../tools/memory/store-memory');
+const searchMemories = require('../../tools/memory/search-memories');
+
 /**
  * Create File Agent instance
  * @param {Object} communicationTools - Tools for inter-agent communication
  * @returns {BaseAgent}
  */
 function createFileAgent(communicationTools = { definitions: [], handlers: {} }) {
-  // Combine file tools with communication tools
+  // Combine file tools with communication tools and memory tools
   const toolDefinitions = [
     ...readFile.definitions,
     ...writeFile.definitions,
     ...patchFile.definitions,
     ...listDir.definitions,
+    ...storeMemory.definitions,
+    ...searchMemories.definitions,
     ...communicationTools.definitions
   ];
 
@@ -32,6 +38,8 @@ function createFileAgent(communicationTools = { definitions: [], handlers: {} })
     ...writeFile.handlers,
     ...patchFile.handlers,
     ...listDir.handlers,
+    ...storeMemory.handlers,
+    ...searchMemories.handlers,
     ...communicationTools.handlers
   };
 

@@ -10,22 +10,30 @@ const { getPrompt } = require('../prompt-manager');
 const executeCommand = require('../../tools/system/execute-command');
 const reloadTools = require('../../tools/system/reload-tools');
 
+// Import memory tools
+const storeMemory = require('../../tools/memory/store-memory');
+const searchMemories = require('../../tools/memory/search-memories');
+
 /**
  * Create System Agent instance
  * @param {Object} communicationTools - Tools for inter-agent communication
  * @returns {BaseAgent}
  */
 function createSystemAgent(communicationTools = { definitions: [], handlers: {} }) {
-  // Combine system tools with communication tools
+  // Combine system tools with communication tools and memory tools
   const toolDefinitions = [
     ...executeCommand.definitions,
     ...reloadTools.definitions,
+    ...storeMemory.definitions,
+    ...searchMemories.definitions,
     ...communicationTools.definitions
   ];
 
   const toolHandlers = {
     ...executeCommand.handlers,
     ...reloadTools.handlers,
+    ...storeMemory.handlers,
+    ...searchMemories.handlers,
     ...communicationTools.handlers
   };
 

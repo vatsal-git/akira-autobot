@@ -1374,6 +1374,16 @@ ipcMain.on('send-message', async (event, { message, chatId, skipCache = false })
         break;
 
       case 'agent_complete':
+        // If there's accumulated content from the completing agent, save it
+        if (accumulatedContent.trim()) {
+          messages.push({
+            role: 'assistant',
+            content: accumulatedContent,
+            timestamp: new Date().toISOString()
+          });
+          accumulatedContent = '';
+        }
+
         // Update agent status in history
         for (let i = messages.length - 1; i >= 0; i--) {
           if (messages[i].type === 'agent' && messages[i].agent === agentEvent.agent && messages[i].status === 'running') {

@@ -10,7 +10,6 @@ const {
   awaitAllPending,
   getPendingTasks,
   getTaskStatus,
-  getSystemStats,
   cancelAllPendingTasks
 } = require('./async-task-manager');
 const {
@@ -200,6 +199,11 @@ async function executeAgent({
       onEvent,
       signal
     });
+
+    const visibility = taskDef.output?.visibility || 'user';
+    if (result && result.success && result.content && parentAgent && visibility === 'user') {
+      result.content = `${result.content}\n\n[SYSTEM NOTE: The response above has already been fully streamed and displayed to the user. Do NOT repeat, summarize, or rewrite the details of this response in your final reply. Instead, just output a very brief wrap-up (e.g. "I have displayed the list above.") or ask if the user has any follow-up questions. Keep your response extremely short.]`;
+    }
 
     return result;
 
@@ -704,15 +708,6 @@ ${getAgentSummaryForPrompt('brief')}`,
         required: []
       }
     },
-    {
-      name: 'get_system_stats',
-      description: 'Get current system resource usage and concurrency limits.',
-      input_schema: {
-        type: 'object',
-        properties: {},
-        required: []
-      }
-    },
     // Emergency stop for Akira
     emergencyStopTool.definition
   ];
@@ -800,13 +795,6 @@ ${getAgentSummaryForPrompt('brief')}`,
         success: true,
         count: pending.length,
         tasks: pending
-      };
-    },
-
-    async get_system_stats() {
-      return {
-        success: true,
-        ...getSystemStats()
       };
     },
 

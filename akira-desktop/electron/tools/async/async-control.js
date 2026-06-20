@@ -7,8 +7,7 @@ const {
   awaitTasks,
   awaitAllPending,
   getPendingTasks,
-  getTaskStatus,
-  getSystemStats
+  getTaskStatus
 } = require('../../agents/async-task-manager');
 
 const definitions = [
@@ -57,15 +56,6 @@ const definitions = [
         }
       },
       required: ['task_id']
-    }
-  },
-  {
-    name: 'get_system_stats',
-    description: 'Get current system resource usage and concurrency limits. Use this to make informed decisions about how many parallel tasks to start.',
-    input_schema: {
-      type: 'object',
-      properties: {},
-      required: []
     }
   }
 ];
@@ -118,13 +108,6 @@ const handlers = {
   async get_task_status(input) {
     const { task_id } = input;
     return getTaskStatus(task_id);
-  },
-
-  async get_system_stats() {
-    return {
-      success: true,
-      ...getSystemStats()
-    };
   }
 };
 

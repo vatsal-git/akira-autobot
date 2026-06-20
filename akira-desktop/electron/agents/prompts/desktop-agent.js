@@ -6,7 +6,8 @@ const {
   getStructuredTaskSection,
   getInterAgentSection,
   getEmergencyStopSection,
-  getClarificationSection
+  getClarificationSection,
+  getMemoryInstructionSection
 } = require('./shared');
 
 module.exports = function getDesktopAgentPrompt() {
@@ -116,6 +117,8 @@ If smart_click unavailable: screenshot → ui_parse (get_ui_elements) → get_ui
 ${getStructuredTaskSection()}
 
 ${getInterAgentSection()}
+
+${getMemoryInstructionSection()}
 
 ### When to Delegate
 - Need to save screenshots → assign_task to 'dobby'

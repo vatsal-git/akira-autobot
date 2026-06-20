@@ -659,6 +659,8 @@ class BaseAgent {
 
     // Use the provider adapter for the API call
     const agentName = this.name;
+    const visibility = this.currentTaskDef?.output?.visibility || 'user';
+
     return await callProvider({
       providerId: provider,
       messages: filteredMessages,
@@ -672,6 +674,11 @@ class BaseAgent {
       credentials,
       reasoningEnabled,
       onEvent: (evt) => {
+        // Suppress streaming text and reasoning if output visibility is internal or user-summary
+        if ((evt.type === 'delta' || evt.type === 'reasoning' || evt.type === 'reasoning_complete') &&
+            (visibility === 'internal' || visibility === 'user-summary')) {
+          return;
+        }
         // Add agent name to events
         onEvent?.({ ...evt, agent: agentName });
       }

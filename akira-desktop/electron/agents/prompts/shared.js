@@ -106,9 +106,24 @@ request_clarification({
 Note: After 2 clarification requests in a task chain, further clarifications go directly to the user.`;
 }
 
+/**
+ * Get the memory management instruction section
+ * @returns {string}
+ */
+function getMemoryInstructionSection() {
+  return `## Memory Management
+
+You have access to tools for storing and searching long-term memories (\`store_memory\` and \`search_memories\`).
+- **Store Reusable Info**: If any information you encounter, learn, or produce is storable or reusable (e.g. user preferences, project structure, config settings, decisions, important paths, or successful command sequences), store it using \`store_memory\`.
+- **Retrieve Reusable Info**: When a task is assigned, immediately retrieve any reusable information or context that might be relevant to the task using \`search_memories\`.
+- **Do Not Store Sensitive Info**: Never store API keys, passwords, credentials, or sensitive data.`;
+}
+
 module.exports = {
   getStructuredTaskSection,
   getInterAgentSection,
   getEmergencyStopSection,
-  getClarificationSection
+  getClarificationSection,
+  getMemoryInstructionSection
 };
+

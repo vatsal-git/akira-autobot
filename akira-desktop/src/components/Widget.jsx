@@ -33,6 +33,7 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const isAtBottomRef = useRef(true);
+  const savedScrollTopRef = useRef(null);
   const currentContentRef = useRef('');
   const lastRelocateTime = useRef(0);
   const reasoningBreakRef = useRef(true); // Track if we need a new reasoning block
@@ -153,6 +154,8 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
     setChatId(null);
     setShowHistory(false);
     setTodoList(null); // Clear todo list for new chat
+    isAtBottomRef.current = true;
+    savedScrollTopRef.current = null;
     // Auto-focus input for new chat
     setTimeout(() => {
       const textarea = document.querySelector('.chat-input__textarea');
@@ -738,6 +741,7 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
     
     isAtBottomRef.current = atBottom;
     setShowScrollBottomBtn(!atBottom);
+    savedScrollTopRef.current = scrollTop;
   }, []);
 
   // Scroll to bottom when messages change, but ONLY if user was already at the bottom
@@ -746,6 +750,34 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
       scrollToBottom('smooth');
     }
   }, [messages, scrollToBottom]);
+
+  // Restore scroll position immediately when transitioning from collapsed to expanded
+  useLayoutEffect(() => {
+    if (!isCollapsed && messagesContainerRef.current) {
+      if (isAtBottomRef.current) {
+        const scrollHeight = messagesContainerRef.current.scrollHeight;
+        messagesContainerRef.current.scrollTop = scrollHeight;
+      } else if (savedScrollTopRef.current !== null) {
+        messagesContainerRef.current.scrollTop = savedScrollTopRef.current;
+      }
+    }
+  }, [isCollapsed]);
+
+  // Maintain scroll position when the message container is resized (e.g. during animations or window resizing)
+  useEffect(() => {
+    if (isCollapsed || !messagesContainerRef.current) return;
+
+    const observer = new ResizeObserver(() => {
+      if (isAtBottomRef.current) {
+        scrollToBottom('auto');
+      } else if (savedScrollTopRef.current !== null && messagesContainerRef.current) {
+        messagesContainerRef.current.scrollTop = savedScrollTopRef.current;
+      }
+    });
+
+    observer.observe(messagesContainerRef.current);
+    return () => observer.disconnect();
+  }, [isCollapsed, scrollToBottom]);
 
   const handleSend = async (text, options = {}) => {
     if (!text.trim() || sending) return;
@@ -792,6 +824,8 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
     }
     setMessages([]);
     setChatId(null);
+    isAtBottomRef.current = true;
+    savedScrollTopRef.current = null;
   };
 
   // Regenerate a response without using cache
@@ -957,6 +991,8 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
         setMessages(displayMessages);
         setChatId(historyChatId);
         setShowHistory(false);
+        isAtBottomRef.current = true;
+        savedScrollTopRef.current = null;
         setTimeout(() => scrollToBottom('auto'), 50);
       }
     }

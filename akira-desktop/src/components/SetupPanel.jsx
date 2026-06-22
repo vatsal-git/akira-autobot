@@ -7,14 +7,7 @@ function SetupPanel({ onComplete }) {
   const [selectedProvider, setSelectedProvider] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
-  const [bedrockCredentials, setBedrockCredentials] = useState({
-    awsSecretAccessKey: '',
-    awsRegion: 'us-east-1'
-  });
-  const [showSecretKey, setShowSecretKey] = useState(false);
   const [selectedModel, setSelectedModel] = useState('');
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -46,50 +39,13 @@ function SetupPanel({ onComplete }) {
       setSelectedModel(provider.defaultModel);
     }
     setApiKey('');
-    setBedrockCredentials({ awsSecretAccessKey: '', awsRegion: 'us-east-1' });
-    setTestResult(null);
     setError('');
-  };
-
-  const handleTestConnection = async () => {
-    if (selectedProvider === 'bedrock') {
-      if (!apiKey.trim() || !bedrockCredentials.awsSecretAccessKey.trim()) {
-        setError('Please enter both AWS Access Key ID and Secret Access Key');
-        return;
-      }
-    } else if (!apiKey.trim()) {
-      setError('Please enter your API key');
-      return;
-    }
-
-    setTesting(true);
-    setError('');
-    setTestResult(null);
-
-    try {
-      if (selectedProvider === 'openrouter') {
-        const success = await window.akira.testConnection(apiKey.trim());
-        if (success) {
-          setTestResult('success');
-        } else {
-          setTestResult('failed');
-          setError('Connection test failed. Please check your API key.');
-        }
-      } else {
-        setTestResult('success');
-      }
-    } catch (err) {
-      setTestResult('failed');
-      setError(`Error: ${err.message || err}`);
-    } finally {
-      setTesting(false);
-    }
   };
 
   const handleNext = () => {
     if (step === 1 && selectedProvider) {
       setStep(2);
-    } else if (step === 2 && testResult === 'success') {
+    } else if (step === 2 && apiKey.trim()) {
       setStep(3);
     }
   };
@@ -97,7 +53,6 @@ function SetupPanel({ onComplete }) {
   const handleBack = () => {
     if (step > 1) {
       setStep(step - 1);
-      setTestResult(null);
       setError('');
     }
   };
@@ -109,17 +64,18 @@ function SetupPanel({ onComplete }) {
     try {
       await window.akira.setSelectedProvider(selectedProvider);
       await window.akira.setProviderApiKey(selectedProvider, apiKey.trim());
-
-      if (selectedProvider === 'bedrock') {
-        await window.akira.setBedrockCredentials(bedrockCredentials);
-      }
-
       await window.akira.setSelectedModel(selectedModel);
       onComplete();
     } catch (err) {
       setError(`Error saving settings: ${err.message || err}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleOpenExternal = (url) => {
+    if (window.akira?.openExternal) {
+      window.akira.openExternal(url);
     }
   };
 
@@ -153,14 +109,13 @@ function SetupPanel({ onComplete }) {
         </div>
 
         {currentProvider.docsUrl && (
-          <a
-            href={currentProvider.docsUrl}
-            target="_blank"
-            rel="noopener noreferrer"
+          <button
+            type="button"
+            onClick={() => handleOpenExternal(currentProvider.docsUrl)}
             className="setup-panel__link"
           >
             Get {currentProvider.name} credentials
-          </a>
+          </button>
         )}
       </div>
 
@@ -191,71 +146,18 @@ function SetupPanel({ onComplete }) {
           Enter your {currentProvider.name} credentials to connect.
         </p>
 
-        {selectedProvider === 'bedrock' ? (
-          <>
-            <div className="setup-panel__input-group">
-              <label className="setup-panel__label">AWS Access Key ID</label>
-              <input
-                type={showApiKey ? 'text' : 'password'}
-                className="setup-panel__input"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="AKIA..."
-                disabled={testing}
-              />
-            </div>
-
-            <div className="setup-panel__input-group">
-              <label className="setup-panel__label">AWS Secret Access Key</label>
-              <input
-                type={showSecretKey ? 'text' : 'password'}
-                className="setup-panel__input"
-                value={bedrockCredentials.awsSecretAccessKey}
-                onChange={(e) => setBedrockCredentials(prev => ({
-                  ...prev,
-                  awsSecretAccessKey: e.target.value
-                }))}
-                placeholder="Enter secret key..."
-                disabled={testing}
-              />
-            </div>
-
-            <div className="setup-panel__input-group">
-              <label className="setup-panel__label">AWS Region</label>
-              <input
-                type="text"
-                className="setup-panel__input"
-                value={bedrockCredentials.awsRegion}
-                onChange={(e) => setBedrockCredentials(prev => ({
-                  ...prev,
-                  awsRegion: e.target.value
-                }))}
-                placeholder="us-east-1"
-                disabled={testing}
-              />
-            </div>
-          </>
-        ) : (
-          <div className="setup-panel__input-group">
-            <label className="setup-panel__label">API Key</label>
-            <input
-              type={showApiKey ? 'text' : 'password'}
-              className="setup-panel__input"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={currentProvider.apiKeyPlaceholder || 'Enter API key...'}
-              disabled={testing}
-            />
-          </div>
-        )}
+        <div className="setup-panel__input-group">
+          <label className="setup-panel__label">API Key</label>
+          <input
+            type={showApiKey ? 'text' : 'password'}
+            className="setup-panel__input"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={currentProvider.apiKeyPlaceholder || 'Enter API key...'}
+          />
+        </div>
 
         {error && <div className="setup-panel__error">{error}</div>}
-
-        {testResult === 'success' && (
-          <div className="setup-panel__success">
-            Credentials look good!
-          </div>
-        )}
       </div>
 
       <div className="setup-panel__footer">
@@ -272,16 +174,9 @@ function SetupPanel({ onComplete }) {
             Back
           </button>
           <button
-            className="setup-panel__btn setup-panel__btn--secondary"
-            onClick={handleTestConnection}
-            disabled={testing || (!apiKey.trim() && selectedProvider !== 'bedrock') || (selectedProvider === 'bedrock' && (!apiKey.trim() || !bedrockCredentials.awsSecretAccessKey.trim()))}
-          >
-            {testing ? 'Testing...' : 'Test'}
-          </button>
-          <button
             className="setup-panel__btn setup-panel__btn--primary"
             onClick={handleNext}
-            disabled={testResult !== 'success'}
+            disabled={!apiKey.trim()}
           >
             Next
           </button>

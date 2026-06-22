@@ -34,9 +34,8 @@ contextBridge.exposeInMainWorld('akira', {
   setSelectedProvider: (providerId) => ipcRenderer.invoke('set-selected-provider', providerId),
   getSelectedModel: () => ipcRenderer.invoke('get-selected-model'),
   setSelectedModel: (model) => ipcRenderer.invoke('set-selected-model', model),
-  // Bedrock credentials
-  getBedrockCredentials: () => ipcRenderer.invoke('get-bedrock-credentials'),
-  setBedrockCredentials: (credentials) => ipcRenderer.invoke('set-bedrock-credentials', credentials),
+  // Open external URL in system browser
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
 
   // Model-specific settings
   getModelSettings: (modelId) => ipcRenderer.invoke('get-model-settings', modelId),
@@ -49,8 +48,9 @@ contextBridge.exposeInMainWorld('akira', {
   getDraftText: () => ipcRenderer.invoke('get-draft-text'),
   setDraftText: (text) => ipcRenderer.invoke('set-draft-text', text),
 
-  // Clipboard file paths
+  // Clipboard
   getClipboardFilePaths: () => ipcRenderer.invoke('get-clipboard-file-paths'),
+  writeClipboard: (text) => ipcRenderer.invoke('write-clipboard', text),
 
   // Chat (uses send/on for streaming)
   sendMessage: (message, chatId, skipCache = false) => {
@@ -120,5 +120,9 @@ contextBridge.exposeInMainWorld('akira', {
   // Agent prompts customization
   getAgentPrompts: () => ipcRenderer.invoke('get-agent-prompts'),
   updateAgentPrompt: (agentName, promptText) => ipcRenderer.invoke('update-agent-prompt', { agentName, promptText }),
-  resetAgentPrompt: (agentName) => ipcRenderer.invoke('reset-agent-prompt', agentName)
+  resetAgentPrompt: (agentName) => ipcRenderer.invoke('reset-agent-prompt', agentName),
+
+  // Agent thinking level
+  getAgentThinkingLevel: (agentName) => ipcRenderer.invoke('get-agent-thinking-level', agentName),
+  setAgentThinkingLevel: (agentName, level) => ipcRenderer.invoke('set-agent-thinking-level', { agentName, level })
 });

@@ -8,14 +8,7 @@ function SetupWizard({ onComplete }) {
   const [selectedProvider, setSelectedProvider] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
-  const [bedrockCredentials, setBedrockCredentials] = useState({
-    awsSecretAccessKey: '',
-    awsRegion: 'us-east-1'
-  });
-  const [showSecretKey, setShowSecretKey] = useState(false);
   const [selectedModel, setSelectedModel] = useState('');
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -47,54 +40,13 @@ function SetupWizard({ onComplete }) {
       setSelectedModel(provider.defaultModel);
     }
     setApiKey('');
-    setBedrockCredentials({ awsSecretAccessKey: '', awsRegion: 'us-east-1' });
-    setTestResult(null);
     setError('');
-  };
-
-  const handleTestConnection = async () => {
-    if (selectedProvider === 'bedrock') {
-      if (!apiKey.trim() || !bedrockCredentials.awsSecretAccessKey.trim()) {
-        setError('Please enter both AWS Access Key ID and Secret Access Key');
-        return;
-      }
-    } else if (!apiKey.trim()) {
-      setError('Please enter your API key');
-      return;
-    }
-
-    setTesting(true);
-    setError('');
-    setTestResult(null);
-
-    try {
-      // For now, we just validate that credentials are provided
-      // A more robust validation would require provider-specific test endpoints
-      if (selectedProvider === 'openrouter') {
-        const success = await window.akira.testConnection(apiKey.trim());
-        if (success) {
-          setTestResult('success');
-        } else {
-          setTestResult('failed');
-          setError('Connection test failed. Please check your API key.');
-        }
-      } else {
-        // For other providers, we trust the credentials format
-        // Real validation happens on first API call
-        setTestResult('success');
-      }
-    } catch (err) {
-      setTestResult('failed');
-      setError(`Error: ${err.message || err}`);
-    } finally {
-      setTesting(false);
-    }
   };
 
   const handleNext = () => {
     if (step === 1 && selectedProvider) {
       setStep(2);
-    } else if (step === 2 && testResult === 'success') {
+    } else if (step === 2 && apiKey.trim()) {
       setStep(3);
     }
   };
@@ -102,7 +54,6 @@ function SetupWizard({ onComplete }) {
   const handleBack = () => {
     if (step > 1) {
       setStep(step - 1);
-      setTestResult(null);
       setError('');
     }
   };
@@ -112,25 +63,20 @@ function SetupWizard({ onComplete }) {
     setError('');
 
     try {
-      // Save provider selection
       await window.akira.setSelectedProvider(selectedProvider);
-
-      // Save API key for the provider
       await window.akira.setProviderApiKey(selectedProvider, apiKey.trim());
-
-      // Save Bedrock credentials if applicable
-      if (selectedProvider === 'bedrock') {
-        await window.akira.setBedrockCredentials(bedrockCredentials);
-      }
-
-      // Save selected model
       await window.akira.setSelectedModel(selectedModel);
-
       onComplete();
     } catch (err) {
       setError(`Error saving settings: ${err.message || err}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleOpenExternal = (url) => {
+    if (window.akira?.openExternal) {
+      window.akira.openExternal(url);
     }
   };
 
@@ -162,15 +108,14 @@ function SetupWizard({ onComplete }) {
       </div>
 
       {currentProvider.docsUrl && (
-        <a
-          href={currentProvider.docsUrl}
-          target="_blank"
-          rel="noopener noreferrer"
+        <button
+          type="button"
+          onClick={() => handleOpenExternal(currentProvider.docsUrl)}
           className="setup__link"
-          style={{ display: 'block', marginBottom: '16px', fontSize: '13px' }}
+          style={{ display: 'block', marginBottom: '16px', fontSize: '13px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', padding: 0 }}
         >
           Get {currentProvider.name} credentials
-        </a>
+        </button>
       )}
 
       <div className="setup__actions">
@@ -197,71 +142,18 @@ function SetupWizard({ onComplete }) {
         Enter your {currentProvider.name} credentials to connect.
       </p>
 
-      {selectedProvider === 'bedrock' ? (
-        <>
-          <div className="setup__input-group">
-            <label className="setup__label">AWS Access Key ID</label>
-            <input
-              type={showApiKey ? 'text' : 'password'}
-              className="setup__input"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="AKIA..."
-              disabled={testing}
-            />
-          </div>
-
-          <div className="setup__input-group">
-            <label className="setup__label">AWS Secret Access Key</label>
-            <input
-              type={showSecretKey ? 'text' : 'password'}
-              className="setup__input"
-              value={bedrockCredentials.awsSecretAccessKey}
-              onChange={(e) => setBedrockCredentials(prev => ({
-                ...prev,
-                awsSecretAccessKey: e.target.value
-              }))}
-              placeholder="Enter secret key..."
-              disabled={testing}
-            />
-          </div>
-
-          <div className="setup__input-group">
-            <label className="setup__label">AWS Region</label>
-            <input
-              type="text"
-              className="setup__input"
-              value={bedrockCredentials.awsRegion}
-              onChange={(e) => setBedrockCredentials(prev => ({
-                ...prev,
-                awsRegion: e.target.value
-              }))}
-              placeholder="us-east-1"
-              disabled={testing}
-            />
-          </div>
-        </>
-      ) : (
-        <div className="setup__input-group">
-          <label className="setup__label">API Key</label>
-          <input
-            type={showApiKey ? 'text' : 'password'}
-            className="setup__input"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder={currentProvider.apiKeyPlaceholder || 'Enter API key...'}
-            disabled={testing}
-          />
-        </div>
-      )}
+      <div className="setup__input-group">
+        <label className="setup__label">API Key</label>
+        <input
+          type={showApiKey ? 'text' : 'password'}
+          className="setup__input"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder={currentProvider.apiKeyPlaceholder || 'Enter API key...'}
+        />
+      </div>
 
       {error && <div className="setup__error">{error}</div>}
-
-      {testResult === 'success' && (
-        <div className="setup__success">
-          Credentials look good!
-        </div>
-      )}
 
       <div className="setup__actions">
         <button
@@ -271,16 +163,9 @@ function SetupWizard({ onComplete }) {
           Back
         </button>
         <button
-          className="setup__btn setup__btn--secondary"
-          onClick={handleTestConnection}
-          disabled={testing || (!apiKey.trim() && selectedProvider !== 'bedrock') || (selectedProvider === 'bedrock' && (!apiKey.trim() || !bedrockCredentials.awsSecretAccessKey.trim()))}
-        >
-          {testing ? 'Testing...' : 'Test Connection'}
-        </button>
-        <button
           className="setup__btn setup__btn--primary"
           onClick={handleNext}
-          disabled={testResult !== 'success'}
+          disabled={!apiKey.trim()}
         >
           Next
         </button>

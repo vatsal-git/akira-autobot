@@ -30,6 +30,8 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
   const [copiedChat, setCopiedChat] = useState(false);
   const [todoList, setTodoList] = useState(null);
   const [showScrollBottomBtn, setShowScrollBottomBtn] = useState(false);
+  const [queuedMessage, setQueuedMessage] = useState(null);
+  const queuedMessageRef = useRef(null);
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const isAtBottomRef = useRef(true);
@@ -37,6 +39,7 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
   const currentContentRef = useRef('');
   const lastRelocateTime = useRef(0);
   const reasoningBreakRef = useRef(true); // Track if we need a new reasoning block
+  const delegationStackRef = useRef([]); // Track delegation chain for return flow visualization
   const lastSpokenRef = useRef('');
   const speechSynthRef = useRef(null);
 
@@ -154,6 +157,9 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
     setChatId(null);
     setShowHistory(false);
     setTodoList(null); // Clear todo list for new chat
+    setQueuedMessage(null); // Clear queued message for new chat
+    queuedMessageRef.current = null;
+    delegationStackRef.current = []; // Clear delegation stack for new chat
     isAtBottomRef.current = true;
     savedScrollTopRef.current = null;
     // Auto-focus input for new chat
@@ -424,6 +430,11 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
         break;
 
       case 'agent_delegate':
+        // Track delegation for return flow visualization
+        delegationStackRef.current.push({
+          fromAgent: data.data.fromAgent,
+          toAgent: data.data.toAgent
+        });
         // One agent delegating to another - check visibility
         if (data.data.visibility !== 'internal') {
           setMessages(prev => [...prev, {
@@ -436,17 +447,53 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
         }
         break;
 
-      case 'agent_complete':
-        // Mark the agent as complete - handle visibility for the result
+      case 'agent_complete': {
+        // Find and pop the delegation from the stack for return flow
+        const completingAgent = data.data.agent;
+        const stackIndex = delegationStackRef.current.findIndex(d => d.toAgent === completingAgent);
+        let returnDelegation = null;
+        if (stackIndex !== -1) {
+          returnDelegation = delegationStackRef.current.splice(stackIndex, 1)[0];
+        }
+
+        // Mark the agent as complete and add return delegation if applicable
+        setMessages(prev => {
+          const updated = prev.map(m => {
+            if (m.type === 'agent' && m.agent === completingAgent && m.status === 'running') {
+              const visibility = data.data._visibility || 'full';
+              return {
+                ...m,
+                status: 'complete',
+                visibility,
+                displayContent: visibility === 'summary' ? data.data.displayContent : null
+              };
+            }
+            return m;
+          });
+
+          // Add return delegation chip if we found the original delegation
+          if (returnDelegation) {
+            updated.push({
+              type: 'delegation',
+              fromAgent: returnDelegation.toAgent,
+              toAgent: returnDelegation.fromAgent,
+              isReturn: true
+            });
+          }
+
+          return updated;
+        });
+        break;
+      }
+
+      case 'agent_error':
+        // Mark the agent as error state
         setMessages(prev => prev.map(m => {
           if (m.type === 'agent' && m.agent === data.data.agent && m.status === 'running') {
-            const visibility = data.data._visibility || 'full';
             return {
               ...m,
-              status: 'complete',
-              visibility,
-              // For user-summary, show the displayContent
-              displayContent: visibility === 'summary' ? data.data.displayContent : null
+              status: 'error',
+              error: data.data.error
             };
           }
           return m;
@@ -517,6 +564,22 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
         ));
         break;
 
+      case 'async_task_result':
+        // Update the original async tool with actual result from await_tasks
+        setMessages(prev => prev.map(m => {
+          if (m.type === 'tool' && m.toolId === data.data.toolId) {
+            const isSuccess = data.data.success !== false && data.data.result?.success !== false;
+            return {
+              ...m,
+              status: isSuccess ? 'completed' : 'failed',
+              result: data.data.result,
+              agent: data.data.agent
+            };
+          }
+          return m;
+        }));
+        break;
+
       case 'done':
         // Speak any remaining content
         if (ttsEnabled && currentContentRef.current) {
@@ -559,17 +622,44 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
           }
           return newMessages;
         });
-        // Auto-focus input for next message
-        setTimeout(() => {
-          const textarea = document.querySelector('.chat-input__textarea');
-          if (textarea) textarea.focus();
-        }, 50);
+        // Check for queued message and send it
+        if (queuedMessageRef.current) {
+          const msgToSend = queuedMessageRef.current;
+          queuedMessageRef.current = null;
+          setQueuedMessage(null);
+          // Small delay to let state settle, then send
+          setTimeout(() => {
+            if (window.akira?.sendMessage) {
+              // Add user message
+              const userMessage = {
+                role: 'user',
+                content: msgToSend,
+                timestamp: new Date().toISOString(),
+              };
+              setMessages(prev => [...prev, userMessage]);
+              setSending(true);
+              setStreaming(true);
+              currentContentRef.current = '';
+              reasoningBreakRef.current = true;
+              window.akira.sendMessage(msgToSend, chatId);
+            }
+          }, 100);
+        } else {
+          // Auto-focus input for next message only if no queued message
+          setTimeout(() => {
+            const textarea = document.querySelector('.chat-input__textarea');
+            if (textarea) textarea.focus();
+          }, 50);
+        }
         break;
 
       case 'cancelled':
         setSending(false);
         setStreaming(false);
         currentContentRef.current = '';
+        // Clear queued message - user cancelled, so don't auto-send
+        queuedMessageRef.current = null;
+        setQueuedMessage(null);
         // Mark last assistant message as incomplete
         setMessages(prev => {
           const newMessages = [...prev];
@@ -586,6 +676,9 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
       case 'error':
         setSending(false);
         setStreaming(false);
+        // Clear queued message on error
+        queuedMessageRef.current = null;
+        setQueuedMessage(null);
         // Preserve partial content if we were streaming
         const partialContent = currentContentRef.current;
         currentContentRef.current = '';
@@ -779,6 +872,12 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
     return () => observer.disconnect();
   }, [isCollapsed, scrollToBottom]);
 
+  // Queue a message to be sent when streaming completes
+  const handleQueueMessage = useCallback((text) => {
+    setQueuedMessage(text);
+    queuedMessageRef.current = text;
+  }, []);
+
   const handleSend = async (text, options = {}) => {
     if (!text.trim() || sending) return;
 
@@ -826,6 +925,7 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
     setChatId(null);
     isAtBottomRef.current = true;
     savedScrollTopRef.current = null;
+    delegationStackRef.current = [];
   };
 
   // Regenerate a response without using cache
@@ -939,7 +1039,8 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
               type: 'delegation',
               fromAgent: msg.fromAgent,
               toAgent: msg.toAgent,
-              task: msg.task
+              task: msg.task,
+              isReturn: msg.isReturn
             });
           } else if (msg.type === 'reasoning') {
             // Reasoning block
@@ -1041,7 +1142,12 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
       timestamp: new Date().toISOString(),
     };
     try {
-      await navigator.clipboard.writeText(JSON.stringify(chatData, null, 2));
+      const text = JSON.stringify(chatData, null, 2);
+      if (window.akira?.writeClipboard) {
+        await window.akira.writeClipboard(text);
+      } else {
+        await navigator.clipboard.writeText(text);
+      }
       setCopiedChat(true);
       setTimeout(() => setCopiedChat(false), 1500);
     } catch (err) {
@@ -1370,7 +1476,7 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
             <ChatInput
               onSend={handleSend}
               onStop={handleStop}
-              disabled={sending}
+              disabled={sending && !streaming}
               isStreaming={streaming}
               ttsEnabled={ttsEnabled}
               onTtsToggle={setTtsEnabled}
@@ -1378,6 +1484,8 @@ function Widget({ settings, onSettingsChange, isSetupMode, onSetupComplete }) {
               onBlur={() => setIsInputFocused(false)}
               chatId={chatId}
               settings={settings}
+              queuedMessage={queuedMessage}
+              onQueueMessage={handleQueueMessage}
             />
           </div>
         </>

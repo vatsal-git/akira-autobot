@@ -82,6 +82,7 @@ function Dropdown({ value, options, groups, onChange, placeholder = 'Select...' 
 
 function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, currentView: externalView, onViewChange }) {
   const [localSettings, setLocalSettings] = useState(settings || {});
+  const [initialScreenCaptureValue] = useState(settings?.hideFromScreenshots ?? false);
   const [models, setModels] = useState([]);
   const [apiKey, setApiKey] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
@@ -95,12 +96,6 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
   const [selectedProvider, setSelectedProvider] = useState('openrouter');
   const [providerApiKeys, setProviderApiKeys] = useState({});
   const [selectedModel, setSelectedModel] = useState('');
-  // Bedrock-specific credentials
-  const [bedrockCredentials, setBedrockCredentials] = useState({
-    awsSecretAccessKey: '',
-    awsRegion: 'us-east-1'
-  });
-  const [showSecretKey, setShowSecretKey] = useState(false);
 
   // Token settings (local state for editing, per-model)
   const [maxTokensInput, setMaxTokensInput] = useState('16384');
@@ -181,6 +176,23 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
     }
   };
 
+  const handleThinkingLevelChange = async (agentName, level) => {
+    // Update local state immediately
+    setAgentPrompts(prev => prev.map(agent => {
+      if (agent.name === agentName) {
+        return { ...agent, thinkingLevel: level };
+      }
+      return agent;
+    }));
+
+    // Save to backend
+    try {
+      await window.akira.setAgentThinkingLevel(agentName, level);
+    } catch (error) {
+      console.error(`Error setting thinking level for ${agentName}:`, error);
+    }
+  };
+
   const toggleAgentExpanded = (agentName) => {
     setExpandedAgent(prev => prev === agentName ? null : agentName);
   };
@@ -231,10 +243,6 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
         keys[provider.id] = key || '';
       }
       setProviderApiKeys(keys);
-
-      // Load Bedrock credentials
-      const bedrockCreds = await window.akira.getBedrockCredentials();
-      setBedrockCredentials(bedrockCreds || { awsSecretAccessKey: '', awsRegion: 'us-east-1' });
     } catch (error) {
       console.error('Error loading providers:', error);
     }
@@ -275,17 +283,6 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
     const modelSettings = await window.akira.getModelSettings(model);
     setMaxTokensInput(String(modelSettings.maxTokens || 16384));
     setThinkingBudgetInput(String(modelSettings.thinkingBudget || 10000));
-    onSettingsChange();
-  };
-
-  // Handle Bedrock credentials change
-  const handleBedrockCredentialChange = (field, value) => {
-    setBedrockCredentials(prev => ({ ...prev, [field]: value }));
-  };
-
-  // Save Bedrock credentials on blur
-  const handleBedrockCredentialsBlur = async () => {
-    await window.akira.setBedrockCredentials(bedrockCredentials);
     onSettingsChange();
   };
 
@@ -446,6 +443,35 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
         </div>
       </div>
 
+      {/* Block Screen Capture Toggle */}
+      <div className="settings-panel__section">
+        <div className="settings-panel__toggle-row">
+          <div className="settings-panel__toggle-info">
+            <h3 className="settings-panel__section-title">
+              Block Screen Capture
+              <span className="settings-panel__info-icon" title="Prevents this window from appearing in screenshots and screen recordings. On Windows 10 (2004+), the window is completely excluded. On older Windows, a black rectangle appears instead. On macOS, newer apps using ScreenCaptureKit may bypass this.">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M12 16v-4M12 8h.01" />
+                </svg>
+              </span>
+            </h3>
+            <p className="settings-panel__hint settings-panel__hint--inline">Hide window from screenshots and recordings</p>
+            {localSettings.hideFromScreenshots !== initialScreenCaptureValue && (
+              <p className="settings-panel__hint settings-panel__hint--warning">Restart required to apply</p>
+            )}
+          </div>
+          <button
+            className={`settings-panel__toggle ${localSettings.hideFromScreenshots ? 'settings-panel__toggle--active' : ''}`}
+            onClick={() => updateSetting('hideFromScreenshots', !localSettings.hideFromScreenshots)}
+            role="switch"
+            aria-checked={localSettings.hideFromScreenshots}
+          >
+            <span className="settings-panel__toggle-slider" />
+          </button>
+        </div>
+      </div>
+
       {/* Start on Startup Toggle */}
       <div className="settings-panel__section">
         <div className="settings-panel__toggle-row">
@@ -495,105 +521,14 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
         />
       </div>
 
-      {/* API Key / Credentials for Selected Provider */}
-      {selectedProvider === 'bedrock' ? (
-        <>
-          {/* AWS Access Key ID */}
-          <div className="settings-panel__section">
-            <div className="settings-panel__section-header">
-              <h3 className="settings-panel__section-title">AWS Access Key ID</h3>
-              {currentProvider.docsUrl && (
-                <a href={currentProvider.docsUrl} target="_blank" rel="noopener noreferrer" className="settings-panel__tutorial-link">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                    <polyline points="15 3 21 3 21 9" />
-                    <line x1="10" y1="14" x2="21" y2="3" />
-                  </svg>
-                  Console
-                </a>
-              )}
-            </div>
-            <div className="settings-panel__input-group">
-              <input
-                type={showApiKey ? 'text' : 'password'}
-                className="settings-panel__input"
-                value={providerApiKeys[selectedProvider] || ''}
-                onChange={(e) => handleProviderApiKeyChange(selectedProvider, e.target.value)}
-                onBlur={() => handleProviderApiKeyBlur(selectedProvider)}
-                placeholder="AKIA..."
-              />
-              <button
-                className="settings-panel__btn-icon"
-                onClick={() => setShowApiKey(!showApiKey)}
-                title={showApiKey ? 'Hide' : 'Show'}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  {showApiKey ? (
-                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22" />
-                  ) : (
-                    <>
-                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                      <circle cx="12" cy="12" r="3" />
-                    </>
-                  )}
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          {/* AWS Secret Access Key */}
-          <div className="settings-panel__section">
-            <h3 className="settings-panel__section-title">AWS Secret Access Key</h3>
-            <div className="settings-panel__input-group">
-              <input
-                type={showSecretKey ? 'text' : 'password'}
-                className="settings-panel__input"
-                value={bedrockCredentials.awsSecretAccessKey || ''}
-                onChange={(e) => handleBedrockCredentialChange('awsSecretAccessKey', e.target.value)}
-                onBlur={handleBedrockCredentialsBlur}
-                placeholder="Enter secret key..."
-              />
-              <button
-                className="settings-panel__btn-icon"
-                onClick={() => setShowSecretKey(!showSecretKey)}
-                title={showSecretKey ? 'Hide' : 'Show'}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  {showSecretKey ? (
-                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22" />
-                  ) : (
-                    <>
-                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                      <circle cx="12" cy="12" r="3" />
-                    </>
-                  )}
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          {/* AWS Region */}
-          <div className="settings-panel__section">
-            <h3 className="settings-panel__section-title">AWS Region</h3>
-            <input
-              type="text"
-              className="settings-panel__input"
-              value={bedrockCredentials.awsRegion || 'us-east-1'}
-              onChange={(e) => handleBedrockCredentialChange('awsRegion', e.target.value)}
-              onBlur={handleBedrockCredentialsBlur}
-              placeholder="us-east-1"
-            />
-          </div>
-        </>
-      ) : (
-        <div className="settings-panel__section">
+      {/* API Key for Selected Provider */}
+      <div className="settings-panel__section">
           <div className="settings-panel__section-header">
             <h3 className="settings-panel__section-title">{currentProvider.name || 'Provider'} API Key</h3>
             {currentProvider.docsUrl && (
-              <a
-                href={currentProvider.docsUrl}
-                target="_blank"
-                rel="noopener noreferrer"
+              <button
+                type="button"
+                onClick={() => window.akira?.openExternal?.(currentProvider.docsUrl)}
                 className="settings-panel__tutorial-link"
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -602,7 +537,7 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
                   <line x1="10" y1="14" x2="21" y2="3" />
                 </svg>
                 Get Key
-              </a>
+              </button>
             )}
           </div>
           <div className="settings-panel__input-group">
@@ -632,7 +567,6 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
             </button>
           </div>
         </div>
-      )}
 
       {/* Model Input */}
       <div className="settings-panel__section">
@@ -738,6 +672,18 @@ function SettingsPanel({ settings, onClose, onSettingsChange, inline = false, cu
             
             {expandedAgent === agent.name && (
               <div className="settings-panel__agent-body">
+                <div className="settings-panel__agent-setting-row">
+                  <label className="settings-panel__section-title">Thinking Level</label>
+                  <select
+                    className="settings-panel__select"
+                    value={agent.thinkingLevel || 'normal'}
+                    onChange={(e) => handleThinkingLevelChange(agent.name, e.target.value)}
+                  >
+                    <option value="quick">Quick - Minimal reasoning</option>
+                    <option value="normal">Normal - Balanced</option>
+                    <option value="deep">Deep - Thorough analysis</option>
+                  </select>
+                </div>
                 <div className="settings-panel__agent-body-header">
                   <span className="settings-panel__section-title">System Prompt</span>
                   <button

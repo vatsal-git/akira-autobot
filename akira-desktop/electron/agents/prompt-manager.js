@@ -5,6 +5,7 @@
 
 const Store = require('electron-store');
 const store = new Store({ name: 'akira-settings' });
+const { getThinkingInstructions } = require('./prompts/shared');
 
 // Default prompt functions mapped to agent names
 const defaultPrompts = {
@@ -15,22 +16,74 @@ const defaultPrompts = {
   beneges: require('./prompts/desktop-agent')
 };
 
+// Valid thinking levels
+const THINKING_LEVELS = ['quick', 'normal', 'deep'];
+const DEFAULT_THINKING_LEVEL = 'normal';
+
+/**
+ * Get the thinking level for an agent
+ * @param {string} agentName - Name of the agent
+ * @returns {string} The thinking level ('quick' | 'normal' | 'deep')
+ */
+function getThinkingLevel(agentName) {
+  const level = store.get(`agentThinkingLevels.${agentName}`);
+  if (level && THINKING_LEVELS.includes(level)) {
+    return level;
+  }
+  return DEFAULT_THINKING_LEVEL;
+}
+
+/**
+ * Set the thinking level for an agent
+ * @param {string} agentName - Name of the agent
+ * @param {string} level - The thinking level ('quick' | 'normal' | 'deep')
+ */
+function setThinkingLevel(agentName, level) {
+  if (!THINKING_LEVELS.includes(level)) {
+    level = DEFAULT_THINKING_LEVEL;
+  }
+  store.set(`agentThinkingLevels.${agentName}`, level);
+
+  // Update active agent in registry if initialized
+  try {
+    const { getAgent } = require('./index');
+    const agent = getAgent(agentName);
+    if (agent) {
+      // Rebuild prompt with new thinking level
+      agent.systemPrompt = getPrompt(agentName);
+      console.log(`[prompt-manager] Updated thinking level for: ${agentName} to ${level}`);
+    }
+  } catch (error) {
+    console.error(`[prompt-manager] Could not update active agent thinking level:`, error.message);
+  }
+}
+
 /**
  * Get the current prompt for an agent (either user-overridden or default)
+ * Prepends thinking instructions based on the agent's thinking level
  * @param {string} agentName - Name of the agent
  * @returns {string} The prompt text
  */
 function getPrompt(agentName) {
+  let basePrompt;
+
   const customPrompt = store.get(`agentPrompts.${agentName}`);
   if (customPrompt && typeof customPrompt === 'string' && customPrompt.trim().length > 0) {
-    return customPrompt;
+    basePrompt = customPrompt;
+  } else {
+    const defaultPromptFn = defaultPrompts[agentName];
+    if (defaultPromptFn) {
+      basePrompt = defaultPromptFn();
+    } else {
+      return '';
+    }
   }
 
-  const defaultPromptFn = defaultPrompts[agentName];
-  if (defaultPromptFn) {
-    return defaultPromptFn();
-  }
-  return '';
+  // Prepend thinking instructions
+  const thinkingLevel = getThinkingLevel(agentName);
+  const thinkingInstructions = getThinkingInstructions(thinkingLevel);
+
+  return `${thinkingInstructions}\n\n${basePrompt}`;
 }
 
 /**
@@ -46,7 +99,8 @@ function updatePrompt(agentName, promptText) {
     const { getAgent } = require('./index');
     const agent = getAgent(agentName);
     if (agent) {
-      agent.systemPrompt = promptText;
+      // Rebuild full prompt with thinking instructions
+      agent.systemPrompt = getPrompt(agentName);
       console.log(`[prompt-manager] Updated active prompt in registry for: ${agentName}`);
     }
   } catch (error) {
@@ -57,31 +111,33 @@ function updatePrompt(agentName, promptText) {
 /**
  * Reset an agent's prompt to its default factory value
  * @param {string} agentName - Name of the agent
- * @returns {string} The default prompt text
+ * @returns {string} The full prompt text (with thinking instructions)
  */
 function resetPrompt(agentName) {
   store.delete(`agentPrompts.${agentName}`);
-
-  const defaultPromptFn = defaultPrompts[agentName];
-  const defaultPrompt = defaultPromptFn ? defaultPromptFn() : '';
 
   // Update active agent in registry if initialized
   try {
     const { getAgent } = require('./index');
     const agent = getAgent(agentName);
     if (agent) {
-      agent.systemPrompt = defaultPrompt;
+      // Rebuild full prompt with thinking instructions
+      agent.systemPrompt = getPrompt(agentName);
       console.log(`[prompt-manager] Reset active prompt in registry for: ${agentName}`);
     }
   } catch (error) {
     console.error(`[prompt-manager] Could not reset active agent in registry:`, error.message);
   }
 
-  return defaultPrompt;
+  // Return the full prompt (with thinking instructions)
+  return getPrompt(agentName);
 }
 
 module.exports = {
   getPrompt,
   updatePrompt,
-  resetPrompt
+  resetPrompt,
+  getThinkingLevel,
+  setThinkingLevel,
+  THINKING_LEVELS
 };

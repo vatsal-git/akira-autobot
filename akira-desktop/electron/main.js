@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, globalShortcut, screen, nativeImage, clipboard, session } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, globalShortcut, screen, nativeImage, clipboard, session, shell } = require('electron');
 app.name = 'Akira';
 const path = require('path');
 const os = require('os');
@@ -69,25 +69,19 @@ const store = new Store({
     apiKey: '', // Legacy - kept for migration
     temperature: 0.7,
     corner: 'bottom-right',
-    theme: 'system',
+    theme: 'dark',
     widgetMode: 'compact', // compact, sidebar, window
     wasVisible: true,
     reasoningEnabled: true,
     disabledTools: [], // Array of tool names to disable
     hideDesktopOverlay: false, // Hide overlay visual feedback (red border, blue overlay, etc.)
+    hideFromScreenshots: false, // Block screen capture (setContentProtection)
     openAtLogin: true,
     // Provider settings
     selectedProvider: 'openrouter',
     selectedModel: 'openrouter/auto',
     providerApiKeys: {
-      openrouter: '',
-      anthropic: '',
-      bedrock: '' // AWS Access Key ID
-    },
-    // Bedrock-specific credentials
-    bedrockCredentials: {
-      awsSecretAccessKey: '',
-      awsRegion: 'us-east-1'
+      openrouter: ''
     },
     // Per-model settings (keyed by model ID)
     modelSettings: {},
@@ -241,6 +235,9 @@ function createWindow() {
       nodeIntegration: false
     }
   });
+
+  // Apply content protection setting (hide from screenshots)
+  mainWindow.setContentProtection(store.get('hideFromScreenshots', false));
 
   // Load the app
   if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
@@ -573,6 +570,7 @@ ipcMain.handle('get-settings', () => {
     reasoningEnabled: store.get('reasoningEnabled', true),
     disabledTools: store.get('disabledTools', []),
     hideDesktopOverlay: store.get('hideDesktopOverlay', false),
+    hideFromScreenshots: store.get('hideFromScreenshots', false),
     openAtLogin: store.get('openAtLogin', true),
     // Provider settings
     selectedProvider: store.get('selectedProvider', 'openrouter'),
@@ -595,6 +593,9 @@ ipcMain.handle('save-settings', (event, settings) => {
   if ('hideDesktopOverlay' in settings) {
     overlayManager.setOverlayHidden(settings.hideDesktopOverlay);
   }
+
+  // Note: hideFromScreenshots requires app restart to take effect on Windows
+  // setContentProtection() doesn't reliably apply without window recreation
 
   // Set startup status if openAtLogin changed
   if ('openAtLogin' in settings) {
@@ -632,6 +633,12 @@ ipcMain.handle('get-draft-text', () => {
 
 ipcMain.handle('set-draft-text', (event, text) => {
   store.set('draftText', text);
+  return true;
+});
+
+// Write to clipboard (for reliable copy in Electron)
+ipcMain.handle('write-clipboard', (event, text) => {
+  clipboard.writeText(text);
   return true;
 });
 
@@ -1135,14 +1142,11 @@ ipcMain.handle('set-selected-model', (event, model) => {
   return true;
 });
 
-// Get Bedrock credentials
-ipcMain.handle('get-bedrock-credentials', () => {
-  return store.get('bedrockCredentials', { awsSecretAccessKey: '', awsRegion: 'us-east-1' });
-});
-
-// Set Bedrock credentials
-ipcMain.handle('set-bedrock-credentials', (event, credentials) => {
-  store.set('bedrockCredentials', credentials);
+// Open external URL in system browser
+ipcMain.handle('open-external', (event, url) => {
+  if (url && (url.startsWith('https://') || url.startsWith('http://'))) {
+    shell.openExternal(url);
+  }
   return true;
 });
 
@@ -1286,9 +1290,6 @@ ipcMain.on('send-message', async (event, { message, chatId, skipCache = false })
   // Get selected model from settings
   const selectedModel = store.get('selectedModel', 'openrouter/auto');
 
-  // Get additional credentials for Bedrock
-  const bedrockCredentials = store.get('bedrockCredentials', {});
-
   // API configuration for agents
   const reasoningEnabled = store.get('reasoningEnabled', true);
   const disabledTools = store.get('disabledTools', []);
@@ -1302,7 +1303,6 @@ ipcMain.on('send-message', async (event, { message, chatId, skipCache = false })
     maxTokens: modelSettings.maxTokens,
     thinkingBudget: modelSettings.thinkingBudget,
     provider: selectedProvider,
-    credentials: selectedProvider === 'bedrock' ? bedrockCredentials : {},
     reasoningEnabled,
     disabledTools
   };
@@ -1391,6 +1391,20 @@ ipcMain.on('send-message', async (event, { message, chatId, skipCache = false })
             break;
           }
         }
+
+        // Find the delegation that started this agent and add return delegation
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].type === 'delegation' && messages[i].toAgent === agentEvent.agent && !messages[i].isReturn) {
+            messages.push({
+              type: 'delegation',
+              fromAgent: agentEvent.agent,
+              toAgent: messages[i].fromAgent,
+              isReturn: true,
+              timestamp: new Date().toISOString()
+            });
+            break;
+          }
+        }
         conversationHistory.set(finalChatId, messages);
 
         // Hide overlay when BeneGes (desktop agent) completes
@@ -1411,6 +1425,26 @@ ipcMain.on('send-message', async (event, { message, chatId, skipCache = false })
 
       case 'agent_error':
         console.log(`[${finalChatId}] Agent error:`, agentEvent.error);
+
+        // Update agent status in history to 'error'
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].type === 'agent' && messages[i].agent === agentEvent.agent && messages[i].status === 'running') {
+            messages[i].status = 'error';
+            messages[i].error = agentEvent.error;
+            break;
+          }
+        }
+        conversationHistory.set(finalChatId, messages);
+
+        // Forward to renderer
+        event.reply('chat-stream', {
+          event: 'agent_error',
+          data: {
+            agent: agentEvent.agent,
+            error: agentEvent.error
+          },
+          chatId: finalChatId
+        });
         break;
 
       case 'delta':
@@ -1546,6 +1580,35 @@ ipcMain.on('send-message', async (event, { message, chatId, skipCache = false })
             success
           });
         }
+        break;
+
+      case 'async_task_result':
+        // Update original async tool with actual result when await_tasks completes
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].type === 'tool' && messages[i].toolId === agentEvent.toolId) {
+            // Determine status based on actual result
+            const actualResult = agentEvent.result;
+            const isSuccess = agentEvent.success !== false && actualResult?.success !== false;
+            messages[i].status = isSuccess ? 'completed' : 'failed';
+            messages[i].result = actualResult;
+            break;
+          }
+        }
+        conversationHistory.set(finalChatId, messages);
+
+        // Forward to renderer so UI can update
+        event.reply('chat-stream', {
+          event: 'async_task_result',
+          data: {
+            toolId: agentEvent.toolId,
+            taskId: agentEvent.taskId,
+            name: agentEvent.toolName,
+            result: agentEvent.result,
+            success: agentEvent.success,
+            agent: agentEvent.agent
+          },
+          chatId: finalChatId
+        });
         break;
     }
   };
@@ -1853,11 +1916,13 @@ ipcMain.handle('get-agent-prompts', () => {
 
     const agentsList = getAvailableAgents();
     
+    const { getThinkingLevel } = require('./agents/prompt-manager');
     return agentsList.map(agent => ({
       name: agent.name,
       displayName: agent.displayName,
       description: agent.description,
-      systemPrompt: getPrompt(agent.name)
+      systemPrompt: getPrompt(agent.name),
+      thinkingLevel: getThinkingLevel(agent.name)
     }));
   } catch (error) {
     console.error('Error getting agent prompts:', error);
@@ -1885,6 +1950,29 @@ ipcMain.handle('reset-agent-prompt', (event, agentName) => {
   } catch (error) {
     console.error(`Error resetting agent prompt for ${agentName}:`, error);
     return '';
+  }
+});
+
+// Get agent thinking level
+ipcMain.handle('get-agent-thinking-level', (event, agentName) => {
+  try {
+    const { getThinkingLevel } = require('./agents/prompt-manager');
+    return getThinkingLevel(agentName);
+  } catch (error) {
+    console.error(`Error getting thinking level for ${agentName}:`, error);
+    return 'normal';
+  }
+});
+
+// Set agent thinking level
+ipcMain.handle('set-agent-thinking-level', (event, { agentName, level }) => {
+  try {
+    const { setThinkingLevel } = require('./agents/prompt-manager');
+    setThinkingLevel(agentName, level);
+    return true;
+  } catch (error) {
+    console.error(`Error setting thinking level for ${agentName}:`, error);
+    return false;
   }
 });
 

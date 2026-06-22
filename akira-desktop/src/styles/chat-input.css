@@ -181,5 +181,15 @@
   background: rgba(0, 0, 0, 0.08);
 }
 
+/* Queued message state */
+.chat-input__textarea--queued {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.theme-light .chat-input__textarea--queued {
+  opacity: 0.6;
+}
+
 
 

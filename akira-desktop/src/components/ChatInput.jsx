@@ -4,10 +4,14 @@ import '../styles/chat-input.css';
 // Regex to match @path patterns (paths starting with @ followed by drive letter or /)
 const FILE_PATH_REGEX = /@([A-Za-z]:[^\s\n]+|\/[^\s\n]+)/g;
 
-function ChatInput({ onSend, onStop, disabled, isStreaming, ttsEnabled, onTtsToggle, onFocus, onBlur, chatId, settings }) {
+function ChatInput({ onSend, onStop, disabled, isStreaming, ttsEnabled, onTtsToggle, onFocus, onBlur, chatId, settings, queuedMessage, onQueueMessage }) {
   const [text, setText] = useState('');
   const textareaRef = useRef(null);
   const saveTimeoutRef = useRef(null);
+
+  // When there's a queued message, show it in the textarea
+  const displayText = queuedMessage || text;
+  const isQueuedState = !!queuedMessage;
 
   // Load draft text on mount, reset when chatId changes
   useEffect(() => {
@@ -64,10 +68,23 @@ function ChatInput({ onSend, onStop, disabled, isStreaming, ttsEnabled, onTtsTog
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (text.trim() && !disabled) {
+    if (!text.trim()) return;
+
+    // If streaming, queue the message instead of sending
+    if (isStreaming && onQueueMessage) {
+      onQueueMessage(text.trim());
+      setText('');
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+      window.akira?.setDraftText?.('');
+      return;
+    }
+
+    // Normal send when not streaming
+    if (!disabled) {
       onSend(text.trim());
       setText('');
-      // Cancel any pending debounced save before clearing draft
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
@@ -76,6 +93,8 @@ function ChatInput({ onSend, onStop, disabled, isStreaming, ttsEnabled, onTtsTog
   };
 
   const handleTextChange = (e) => {
+    // Don't allow changes when message is queued
+    if (isQueuedState) return;
     const value = e.target.value;
     setText(value);
     saveDraft(value);
@@ -171,15 +190,15 @@ function ChatInput({ onSend, onStop, disabled, isStreaming, ttsEnabled, onTtsTog
       <div className="chat-input__wrapper">
         <textarea
           ref={textareaRef}
-          className="chat-input__textarea"
-          value={text}
+          className={`chat-input__textarea ${isQueuedState ? 'chat-input__textarea--queued' : ''}`}
+          value={displayText}
           onChange={handleTextChange}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           onFocus={onFocus}
           onBlur={onBlur}
           placeholder="Type here..."
-          disabled={disabled}
+          disabled={isQueuedState || disabled}
           rows={1}
         />
         <button

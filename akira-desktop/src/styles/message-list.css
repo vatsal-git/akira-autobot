@@ -510,6 +510,10 @@
   margin-top: 12px;
 }
 
+.message + .trail-item--return {
+  margin-top: 4px;
+}
+
 .trail-item__line {
   position: absolute;
   left: 5px;
@@ -539,6 +543,10 @@
 
 .trail-item__dot--running {
   background: #eab308;
+}
+
+.trail-item__dot--error {
+  background: #ef4444;
 }
 
 .trail-item__dot--pending {
@@ -584,6 +592,26 @@
 .trail-item__arrow {
   color: var(--color-text-muted);
   margin: 0 4px;
+}
+
+.trail-item__arrow--return {
+  color: #8b5cf6;
+}
+
+.trail-item__dot--return {
+  background: #8b5cf6;
+}
+
+.trail-item--return {
+  opacity: 0.85;
+}
+
+.trail-item--return .trail-item__header {
+  cursor: default;
+}
+
+.trail-item--return .trail-item__header:hover {
+  opacity: 1;
 }
 
 .trail-item__chevron {

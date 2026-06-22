@@ -30,15 +30,7 @@ function App() {
         // Check if the selected provider has an API key configured
         const selectedProvider = await window.akira.getSelectedProvider();
         const apiKey = await window.akira.getProviderApiKey(selectedProvider);
-
-        // For Bedrock, also check if credentials are set
-        if (selectedProvider === 'bedrock') {
-          const credentials = await window.akira.getBedrockCredentials();
-          const hasCredentials = apiKey && credentials?.awsSecretAccessKey;
-          setIsConfigured(!!hasCredentials);
-        } else {
-          setIsConfigured(!!apiKey);
-        }
+        setIsConfigured(!!apiKey);
       } else if (window.akira?.hasApiKey) {
         // Fallback to legacy check
         const hasKey = await window.akira.hasApiKey();

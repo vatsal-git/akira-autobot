@@ -10,6 +10,7 @@ const {
   awaitAllPending,
   getPendingTasks,
   getTaskStatus,
+  getTask,
   cancelAllPendingTasks
 } = require('./async-task-manager');
 const {
@@ -527,24 +528,36 @@ function createAgentCommunicationTools(currentAgentName, apiConfig, onEvent, sig
     async await_tasks(input) {
       const { task_ids = [], timeout = 60000 } = input;
 
+      let results;
       if (!task_ids || task_ids.length === 0) {
         const result = await awaitAllPending(currentAgentName);
-        return {
-          success: true,
-          waited_for: 'all_pending',
-          ...result
-        };
+        results = result.results || {};
+      } else {
+        results = await awaitTasks(task_ids, timeout);
       }
-
-      const results = await awaitTasks(task_ids, timeout);
 
       let successCount = 0;
       let failCount = 0;
       for (const taskId of Object.keys(results)) {
-        if (results[taskId].success) {
+        const taskResult = results[taskId];
+        if (taskResult.success) {
           successCount++;
         } else {
           failCount++;
+        }
+
+        // Emit async_task_result event so the original tool status can be updated
+        const task = getTask(taskId);
+        if (task && task.metadata?.toolCallId) {
+          onEvent?.({
+            type: 'async_task_result',
+            agent: task.metadata.agent || currentAgentName,
+            taskId: taskId,
+            toolId: task.metadata.toolCallId,
+            toolName: task.metadata.toolName,
+            result: taskResult.result || taskResult,
+            success: taskResult.success
+          });
         }
       }
 
@@ -761,24 +774,36 @@ ${getAgentSummaryForPrompt('brief')}`,
     async await_tasks(input) {
       const { task_ids = [], timeout = 60000 } = input;
 
+      let results;
       if (!task_ids || task_ids.length === 0) {
         const result = await awaitAllPending();
-        return {
-          success: true,
-          waited_for: 'all_pending',
-          ...result
-        };
+        results = result.results || {};
+      } else {
+        results = await awaitTasks(task_ids, timeout);
       }
-
-      const results = await awaitTasks(task_ids, timeout);
 
       let successCount = 0;
       let failCount = 0;
       for (const taskId of Object.keys(results)) {
-        if (results[taskId].success) {
+        const taskResult = results[taskId];
+        if (taskResult.success) {
           successCount++;
         } else {
           failCount++;
+        }
+
+        // Emit async_task_result event so the original tool status can be updated
+        const task = getTask(taskId);
+        if (task && task.metadata?.toolCallId) {
+          onEvent?.({
+            type: 'async_task_result',
+            agent: task.metadata.agent || 'akira',
+            taskId: taskId,
+            toolId: task.metadata.toolCallId,
+            toolName: task.metadata.toolName,
+            result: taskResult.result || taskResult,
+            success: taskResult.success
+          });
         }
       }
 

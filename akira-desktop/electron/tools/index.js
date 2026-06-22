@@ -196,7 +196,7 @@ async function executeTool(name, input) {
 
   try {
     const result = await handler(input);
-    return { success: true, result };
+    return result;
   } catch (error) {
     console.error(`Tool ${name} failed:`, error);
     return { success: false, error: error.message || String(error) };

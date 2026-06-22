@@ -122,11 +122,22 @@ function ReasoningChip({ reasoning, isConnected }) {
   );
 }
 
+// Check if a tool result indicates failure
+function isToolResultFailed(result) {
+  if (!result) return false;
+  return result.success === false;
+}
+
 // Tool call chip component (minimal trail style)
 function ToolCallChip({ tool, isConnected, todoList }) {
   const [expanded, setExpanded] = useState(false);
   const isRunning = tool.status === 'running';
-  const dotClass = isRunning ? 'trail-item__dot--running' : 'trail-item__dot--completed';
+  const isFailed = tool.status === 'failed' || (tool.status === 'completed' && isToolResultFailed(tool.result));
+  const dotClass = isRunning
+    ? 'trail-item__dot--running'
+    : isFailed
+      ? 'trail-item__dot--error'
+      : 'trail-item__dot--completed';
   const isTodoTool = tool.name === 'create_todo' || tool.name === 'update_todo';
   const showTodoList = isTodoTool && tool.status === 'completed' && todoList;
 
@@ -270,11 +281,6 @@ function MessageList({ messages, isStreaming, onRegenerate, onContinue, onEmerge
     return -1;
   };
 
-  // Check if we need to show a standalone typing indicator
-  // (streaming but last displayable item is not an assistant message)
-  const lastDisplay = displayMessages[displayMessages.length - 1];
-  const showTypingIndicator = isStreaming && lastDisplay && lastDisplay.role !== 'assistant';
-
   return (
     <div className="message-list">
       {displayMessages.map((message, index) => {
@@ -314,17 +320,6 @@ function MessageList({ messages, isStreaming, onRegenerate, onContinue, onEmerge
           />
         );
       })}
-      {showTypingIndicator && (
-        <div className="message message--assistant message--typing">
-          <div className="message__content">
-            <span className="message__typing">
-              <span className="message__typing-dot" />
-              <span className="message__typing-dot" />
-              <span className="message__typing-dot" />
-            </span>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -380,12 +375,6 @@ function Message({ message, isLast, isStreaming, onRegenerate, onContinue }) {
               >
                 {message.content}
               </ReactMarkdown>
-            ) : isStreaming ? (
-              <span className="message__typing">
-                <span className="message__typing-dot" />
-                <span className="message__typing-dot" />
-                <span className="message__typing-dot" />
-              </span>
             ) : null}
           </div>
         )}

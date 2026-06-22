@@ -119,11 +119,40 @@ You have access to tools for storing and searching long-term memories (\`store_m
 - **Do Not Store Sensitive Info**: Never store API keys, passwords, credentials, or sensitive data.`;
 }
 
+/**
+ * Get thinking style instructions based on level
+ * @param {string} level - 'quick' | 'normal' | 'deep'
+ * @returns {string}
+ */
+function getThinkingInstructions(level = 'normal') {
+  const instructions = {
+    quick: `## Thinking Style: Quick
+- Think briefly and act fast
+- Skip detailed analysis for simple tasks
+- Only reason through genuinely complex decisions
+- Prefer action over deliberation
+- One short thought, then execute`,
+
+    normal: `## Thinking Style: Normal
+- Balance thinking with action
+- Brief reasoning for straightforward tasks
+- More thorough analysis only when complexity warrants it`,
+
+    deep: `## Thinking Style: Deep
+- Think through problems thoroughly before acting
+- Consider edge cases and alternatives
+- Document your reasoning process
+- Verify assumptions before proceeding`
+  };
+  return instructions[level] || instructions.normal;
+}
+
 module.exports = {
   getStructuredTaskSection,
   getInterAgentSection,
   getEmergencyStopSection,
   getClarificationSection,
-  getMemoryInstructionSection
+  getMemoryInstructionSection,
+  getThinkingInstructions
 };
 

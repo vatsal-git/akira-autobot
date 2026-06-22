@@ -332,7 +332,7 @@ class BaseAgent {
     if (this.toolHandlers[toolName]) {
       try {
         const result = await this.toolHandlers[toolName](input);
-        return { success: true, result };
+        return result;
       } catch (error) {
         console.error(`[${this.name}] Tool ${toolName} error:`, error);
         return { success: false, error: error.message };
